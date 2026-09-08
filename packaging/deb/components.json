@@ -31,12 +31,13 @@
       ],
       "build_targets": null,
       "payload_roots": [
-        "usr/include"
+        "usr/include",
+        "usr/share"
       ],
       "section": "libdevel",
       "architecture": "all",
-      "description": "development headers for PipeWireAO SPA plugins",
-      "long_description": "Public factory names, property keys, schemas, and small header-only helpers for applications that configure the plugins."
+      "description": "development files for PipeWireAO SPA plugins",
+      "long_description": "Public factory names, property keys, schemas, small header-only helpers, and pkg-config metadata for applications and plugins that use the shared API."
     }
   }
 }

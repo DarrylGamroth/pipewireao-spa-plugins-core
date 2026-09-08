@@ -1,0 +1,8 @@
+prefix=@PREFIX@
+includedir=${prefix}/@INCLUDEDIR@
+
+Name: PipeWireAO SPA plugin API
+Description: Public configuration headers shared by PipeWireAO SPA plugins
+Version: @VERSION@
+Requires: libspa-ao-0.2 >= 0.2
+Cflags: -I${includedir}/pipewireao-plugins-0.1

@@ -17,8 +17,18 @@ add_project_arguments('-D_GNU_SOURCE', language: 'c')
 
 spa_pkg_dep = dependency('libspa-ao-0.2', version: '>= 0.2')
 pipewire_pkg_dep = dependency('libpipewire-ao-0.3', version: '>= 1.7')
+plugin_api_dependencies = []
+if fs.is_dir('include/pipewireao-plugins')
+  plugin_include = include_directories('include')
+else
+  plugin_api_dependencies += dependency(
+    'pipewireao-spa-plugins-0.1',
+    version: '>= 0.1.0',
+  )
+  plugin_include = []
+endif
 spa_dep = declare_dependency(
-  dependencies: spa_pkg_dep,
+  dependencies: [spa_pkg_dep] + plugin_api_dependencies,
   include_directories: include_directories(
     spa_pkg_dep.get_variable(pkgconfig: 'spa_includedir'),
     is_system: true,
@@ -31,7 +41,6 @@ dl_dep = cc.find_library('dl', required: false)
 m_dep = cc.find_library('m')
 threads_dep = dependency('threads')
 drm_dep = dependency('libdrm', required: false)
-plugin_include = include_directories('include')
 genicam_feature_include = include_directories('spa/plugins/genicam')
 genicam_feature_lib = static_library(
   'pwao-genicam-feature',
@@ -42,17 +51,32 @@ genicam_feature_dep = declare_dependency(
   include_directories: genicam_feature_include,
 )
 
-install_headers(
-  'include/pipewireao-plugins/alpao.h',
-  'include/pipewireao-plugins/discard.h',
-  'include/pipewireao-plugins/fits.h',
-  'include/pipewireao-plugins/imagestreamio.h',
-  'include/pipewireao-plugins/ndarray.h',
-  'include/pipewireao-plugins/nuvu.h',
-  'include/pipewireao-plugins/pod.h',
-  'include/pipewireao-plugins/pyrtc.h',
-  subdir: 'pipewireao-plugins-0.1/pipewireao-plugins',
-)
+if fs.is_dir('include/pipewireao-plugins')
+  install_headers(
+    'include/pipewireao-plugins/alpao.h',
+    'include/pipewireao-plugins/discard.h',
+    'include/pipewireao-plugins/fits.h',
+    'include/pipewireao-plugins/imagestreamio.h',
+    'include/pipewireao-plugins/ndarray.h',
+    'include/pipewireao-plugins/nuvu.h',
+    'include/pipewireao-plugins/pod.h',
+    'include/pipewireao-plugins/pyrtc.h',
+    subdir: 'pipewireao-plugins-0.1/pipewireao-plugins',
+  )
+
+  pkgconfig_data = configuration_data()
+  pkgconfig_data.set('PREFIX', get_option('prefix'))
+  pkgconfig_data.set('INCLUDEDIR', get_option('includedir'))
+  pkgconfig_data.set('VERSION', meson.project_version())
+  configure_file(
+    input: 'pipewireao-spa-plugins-0.1.pc.in',
+    output: 'pipewireao-spa-plugins-0.1.pc',
+    configuration: pkgconfig_data,
+    install: true,
+    install_dir: get_option('datadir') / 'pkgconfig',
+    install_tag: 'devel',
+  )
+endif
 
 if get_option('tests').allowed()
   image_frame_test = executable(
@@ -384,7 +408,11 @@ if imagestreamio_found and fs.exists('spa/plugins/imagestreamio/meson.build')
   subdir('spa/plugins/imagestreamio')
 endif
 
-summary('Format-agnostic discard sink', true, section: 'SPA plugins')
+summary(
+  'Format-agnostic discard sink',
+  fs.exists('spa/plugins/discard/meson.build'),
+  section: 'SPA plugins',
+)
 summary('eGrabber plugin', egrabber_found, section: 'SPA plugins')
 summary('BGAPI2 plugin', bgapi2_found, section: 'SPA plugins')
 summary('EDT PDV plugin', edtpdv_found, section: 'SPA plugins')
