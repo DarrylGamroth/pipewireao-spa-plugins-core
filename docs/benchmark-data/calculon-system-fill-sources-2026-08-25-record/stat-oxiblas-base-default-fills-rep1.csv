@@ -1,6 +1,0 @@
-# started on Tue Aug 25 02:07:14 2026
-
-9581866788;;cycles:u;2188236805;100.00;;
-24761984771;;instructions:u;2188236805;100.00;2.58;insn per cycle
-23968526;;ls_any_fills_from_sys.int_cache:u;2188236805;100.00;;
-196543370;;ls_any_fills_from_sys.mem_io_local:u;2188236805;100.00;;

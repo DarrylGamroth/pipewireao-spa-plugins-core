@@ -1,4 +1,0 @@
-exit=0
-2e67f11ec8a0e410397e1b1ad2c09957683d396f /home/dgamroth/workspaces/codex/pipewire/pipewireao-spa-plugins-profiling/build-profile/spa/plugins/calculon/libspa-calculon.so
-c495b62edadd6c356265942ec1282d98058a7b41 /usr/lib/x86_64-linux-gnu/libc.so.6
-60858bf1da19ff4381abce9cb512d91c9a0b5e30 [vdso]

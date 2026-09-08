@@ -1,8 +1,0 @@
-[wrap-git]
-directory = aravis
-url = https://github.com/DarrylGamroth/aravis.git
-revision = 7a3b34b18315e8eaf8024980be6c3749685d7c19
-depth = 1
-
-[provide]
-dependency_names = aravis-0.10

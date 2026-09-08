@@ -15,7 +15,9 @@
   "components": {
     "core": {
       "package": "pipewireao-spa-plugins-core",
-      "install_tags": ["core"],
+      "install_tags": [
+        "core"
+      ],
       "build_targets": [],
       "requires_pipewire_rs": true,
       "section": "libs",
@@ -24,131 +26,17 @@
     },
     "dev": {
       "package": "pipewireao-spa-plugins-dev",
-      "install_tags": ["devel"],
+      "install_tags": [
+        "devel"
+      ],
       "build_targets": null,
-      "payload_roots": ["usr/include"],
+      "payload_roots": [
+        "usr/include"
+      ],
       "section": "libdevel",
       "architecture": "all",
       "description": "development headers for PipeWireAO SPA plugins",
       "long_description": "Public factory names, property keys, schemas, and small header-only helpers for applications that configure the plugins."
-    },
-    "fits": {
-      "package": "pipewireao-spa-plugin-fits",
-      "install_tags": ["fits"],
-      "enable": ["fits"],
-      "build_targets": ["spa-fits"],
-      "depends_on_core": true,
-      "section": "libs",
-      "description": "CFITSIO-backed PipeWireAO FITS source",
-      "long_description": "A fixed-cadence FITS vector and image-sequence source, including the simulated camera row-readout profile."
-    },
-    "aravis": {
-      "package": "pipewireao-spa-plugin-aravis",
-      "install_tags": ["aravis"],
-      "enable": ["aravis"],
-      "build_targets": ["spa-aravis"],
-      "depends_on_core": true,
-      "section": "libs",
-      "description": "Aravis-backed PipeWireAO camera source",
-      "long_description": "The experimental Aravis GenTL and native GigE Vision comparison source."
-    },
-    "imagestreamio": {
-      "package": "pipewireao-spa-plugin-imagestreamio",
-      "install_tags": ["imagestreamio"],
-      "enable": ["imagestreamio"],
-      "build_targets": ["spa-imagestreamio"],
-      "depends_on_core": true,
-      "section": "libs",
-      "description": "ImageStreamIO bridge for PipeWireAO",
-      "long_description": "SPA source and sink factories that copy ndarray buffers to and from milk ImageStreamIO shared-memory streams."
-    },
-    "alpao": {
-      "package": "pipewireao-spa-plugin-alpao",
-      "install_tags": ["alpao"],
-      "enable": ["alpao-sdk"],
-      "build_targets": ["spa-alpao", "alpao-fgn"],
-      "private_runtime": true,
-      "depends_on_core": true,
-      "section": "libs",
-      "description": "ALPAO deformable-mirror plugins for PipeWireAO",
-      "long_description": "The ALPAO command-normalization FGN operator and deformable-mirror SPA sink linked to the separately provisioned proprietary ASDK runtime."
-    },
-    "egrabber": {
-      "package": "pipewireao-spa-plugin-egrabber",
-      "install_tags": ["egrabber"],
-      "enable": ["egrabber"],
-      "build_targets": ["spa-egrabber"],
-      "private_runtime": true,
-      "depends_on_core": true,
-      "section": "libs",
-      "description": "Euresys eGrabber source for PipeWireAO",
-      "long_description": "The Euresys eGrabber camera manager, device, and source factories linked to the separately provisioned proprietary SDK runtime."
-    },
-    "bgapi2": {
-      "package": "pipewireao-spa-plugin-bgapi2",
-      "install_tags": ["bgapi2"],
-      "enable": ["bgapi2"],
-      "build_targets": ["spa-bgapi2"],
-      "private_runtime": true,
-      "depends_on_core": true,
-      "section": "libs",
-      "description": "Baumer GAPI2 source for PipeWireAO",
-      "long_description": "The Baumer GAPI2 camera source linked to the separately provisioned proprietary SDK runtime."
-    },
-    "edtpdv": {
-      "package": "pipewireao-spa-plugin-edtpdv",
-      "install_tags": ["edtpdv"],
-      "enable": ["edtpdv"],
-      "build_targets": ["spa-edtpdv"],
-      "private_runtime": true,
-      "depends_on_core": true,
-      "section": "libs",
-      "description": "EDT PDV source for PipeWireAO",
-      "long_description": "The EDT PCI DV/PDV Camera Link source linked to the separately provisioned proprietary SDK runtime."
-    },
-    "flisdk": {
-      "package": "pipewireao-spa-plugin-flisdk",
-      "install_tags": ["flisdk"],
-      "enable": ["flisdk"],
-      "build_targets": ["spa-flisdk"],
-      "private_runtime": true,
-      "depends_on_core": true,
-      "section": "libs",
-      "description": "First Light Imaging source for PipeWireAO",
-      "long_description": "The First Light Imaging camera source linked to the separately provisioned proprietary FliSdk runtime."
-    },
-    "andor3": {
-      "package": "pipewireao-spa-plugin-andor3",
-      "install_tags": ["andor3"],
-      "enable": ["andor3"],
-      "build_targets": ["spa-andor3"],
-      "private_runtime": true,
-      "depends_on_core": true,
-      "section": "libs",
-      "description": "Andor SDK3 source for PipeWireAO",
-      "long_description": "The Andor camera source linked to the separately provisioned proprietary SDK3 runtime."
-    },
-    "hamamatsu": {
-      "package": "pipewireao-spa-plugin-hamamatsu",
-      "install_tags": ["hamamatsu"],
-      "enable": ["hamamatsu"],
-      "build_targets": ["spa-hamamatsu"],
-      "private_runtime": true,
-      "depends_on_core": true,
-      "section": "libs",
-      "description": "Hamamatsu DCAM-API source for PipeWireAO",
-      "long_description": "The Hamamatsu camera source linked to the separately provisioned proprietary DCAM-API runtime."
-    },
-    "hermes": {
-      "package": "pipewireao-spa-plugin-hermes",
-      "install_tags": ["hermes"],
-      "enable": ["hermes"],
-      "build_targets": ["spa-hermes-source"],
-      "private_runtime": true,
-      "depends_on_core": true,
-      "section": "libs",
-      "description": "MPD HERMES source for PipeWireAO",
-      "long_description": "The MPD HERMES FrontPanel camera source linked to the separately provisioned proprietary HERMES and Opal Kelly runtimes."
     }
   }
 }

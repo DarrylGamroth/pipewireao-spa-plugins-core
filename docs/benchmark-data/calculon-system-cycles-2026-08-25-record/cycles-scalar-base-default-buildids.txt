@@ -1,7 +1,0 @@
-exit=0
-7c9b7e93c306d311e5bce6d3df602286c80cc192 /home/dgamroth/workspaces/codex/pipewire/pipewireao-spa-plugins-profiling/build-profile-scalar/spa/plugins/calculon/libspa-calculon.so
-1040710f8fd9243874fa5f6c33061fdef81718a3 /home/dgamroth/workspaces/codex/pipewire/pipewireao-spa-plugins-profiling/build-profile/spa/plugins/alpao/libspa-alpao-mock.so
-e02878e5a590ee9a0426cf43ce2e1c37415d79ae /home/dgamroth/workspaces/codex/pipewire/pipewireao-spa-plugins-profiling/build-profile/spa/plugins/calculon/spa-calculon-full-system-test
-c495b62edadd6c356265942ec1282d98058a7b41 /usr/lib/x86_64-linux-gnu/libc.so.6
-d29a7c458f7287e043337234ba4b434454b54ff2 [kernel.kallsyms]
-60858bf1da19ff4381abce9cb512d91c9a0b5e30 [vdso]

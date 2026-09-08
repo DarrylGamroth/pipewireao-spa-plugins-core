@@ -13,18 +13,18 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     /usr/local/bin/pipewireao-apt-install \
       build-essential \
       ca-certificates \
-      cargo \
       dpkg-dev \
       meson \
       ninja-build \
       pkg-config \
       python3 \
+      cargo \
       rustc \
       ${APT_BUILD_PACKAGES}
 
 COPY --from=pipewire-rs . /src/pipewire-rs
-COPY . /src/pipewireao-spa-plugins
-WORKDIR /src/pipewireao-spa-plugins
+COPY . /src/pipewireao-spa-plugins-core
+WORKDIR /src/pipewireao-spa-plugins-core
 
 ARG COMPONENT=core
 ARG DEB_VERSION=""
