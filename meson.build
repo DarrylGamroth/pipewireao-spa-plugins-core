@@ -41,16 +41,6 @@ dl_dep = cc.find_library('dl', required: false)
 m_dep = cc.find_library('m')
 threads_dep = dependency('threads')
 drm_dep = dependency('libdrm', required: false)
-genicam_feature_include = include_directories('spa/plugins/genicam')
-genicam_feature_lib = static_library(
-  'pwao-genicam-feature',
-  'spa/plugins/genicam/feature.c',
-)
-genicam_feature_dep = declare_dependency(
-  link_with: genicam_feature_lib,
-  include_directories: genicam_feature_include,
-)
-
 if fs.is_dir('include/pipewireao-plugins')
   install_headers(
     'include/pipewireao-plugins/alpao.h',
@@ -86,12 +76,6 @@ if get_option('tests').allowed()
   )
   test('spa-image-frame', image_frame_test)
 
-  genicam_feature_test = executable(
-    'spa-genicam-feature-test',
-    'spa/plugins/genicam/test-feature.c',
-    dependencies: [spa_dep, genicam_feature_dep],
-  )
-  test('spa-genicam-feature', genicam_feature_test)
 endif
 
 foreach component_dir : [

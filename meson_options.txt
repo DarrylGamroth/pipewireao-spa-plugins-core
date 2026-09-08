@@ -48,20 +48,6 @@ option(
 )
 
 option(
-  'genicam-root',
-  type: 'string',
-  value: '',
-  description: 'Optional GenICam Reference Implementation root enabling CLProtocol control',
-)
-
-option(
-  'clprotocol-test-backend',
-  type: 'string',
-  value: '',
-  description: 'Optional CLProtocol provider library used by the host integration test',
-)
-
-option(
   'bgapi2',
   type: 'feature',
   value: 'disabled',
