@@ -15,8 +15,8 @@ authorized build pause at source commit `fefc8f3`: 14 wrapper tests, 5 ndarray
 tests, the full C regression, and the export check passed. Its release DSO is
 preserved in `evidence/libspa-ndarray-clean.so` with SHA-256
 `153839f352590a992655f327ef892c1dff3595ab9fbe80f183ed2aeb7ec6458c`.
-Connected source and receiving-path qualification of this binary remains
-pending. Prior snapshot-based qualifications do not validate the clean binary.
+The exact clean binary subsequently passed its own connected source and
+five receiving-path qualification described below.
 
 ## Readiness
 
@@ -104,18 +104,50 @@ feature macro and passed without source changes. The inherited libspa header
 unused-parameter warning remains. The negative control was restored and its
 binary was not used for C qualification or preserved as a deployment candidate.
 
-Connected FITS source and receiving-path qualification remain necessary before
-calling the clean backport qualified. No timing/capacity or hardware claim,
-live UDP run, main branch update, installation or push follows from these
-software checks. The prior frozen private plugin directory remains unchanged.
+## Connected clean-binary qualification
+
+A new immutable private pair combines the exact clean ndarray DSO above and
+qualified FITS SHA-256
+`947ba07a07f5da0e8c60b408455933689e3cc7a7cc1ca8dbf8c358c9ac3f8a41` at
+`/home/dgamroth/.cache/rtc-classic-spa-private-clean-plugins-20260930`.
+Unrelated plugins remain symlinks to their installed directories. The previous
+private pair and `/opt` were not changed.
+
+The connected seven-frame source test captured exactly 224 datagrams, ordered
+IDs 0–6, and matching fixed headers/pixels, with zero sink errors and normal
+exit. Fresh sequential HEART, FGN-frame, JFG-frame, FGN-row, and JFG-row runs then
+replayed the same 63-frame UInt16 corpus at 100 Hz, 2,000 µs readout and 11 rows
+per packet. Each captured 2,016 WFS packets and 63 DM commands, ordered complete
+WFS IDs 0–62, no payload mismatch or repeated/decreasing DM IDs, passing selected
+source-arithmetic checks, zero sender errors, and normal process exits.
+
+FGN/JFG receiver counts were 63 frames and zero rejection/drop/starvation, with
+2,016 blocks in row mode. JFG retained final feedback passed: maximum error
+1.19 × 10⁻⁷ µm in frame mode and 2.38 × 10⁻⁷ µm in row mode, with 74 nonzero
+values matching the expectation. HEART matched its exact source-model command
+bits and 76 expected clipped actuators. Its broad legacy `qualified` remains
+false for the documented historical strict comparison/initial-state readback
+limitations; `functional_wire_qualified` and the selected arithmetic policy
+pass. FGN reports do not expose a separate retained-feedback comparison.
+
+Commands, harness revision `ebe583f`, script and plugin hashes, process results,
+counter validation, and Zstandard wire archive hashes are retained in
+`/home/dgamroth/.cache/rtc-classic-spa-clean-five-paths63-20260930/manifest.json`.
+The seven-frame result is at
+`/home/dgamroth/.cache/rtc-classic-spa-clean-source7-20260930`.
+Historical failed harness attempts remain separately preserved, and prior
+three-factory qualification was not substituted for this clean-binary result.
+This establishes functional transport and selected numerical consistency;
+timing, capacity, hardware, main integration and deployment are not qualified
+by these runs.
 
 ## Delivery boundary
 
 This clean baseline retains its existing two ndarray factories. The original
 dirty owner and previously qualified binary contain a pre-existing third
 factory. Integration with that local work and installation must preserve the
-intended deployed factory set. Do not replace it with this software-tested but
-not yet source-qualified clean binary or merge the investigative snapshot
-merely to obtain its factories.
+intended deployed factory set. This source-qualified two-factory binary does
+not authorize removal of an existing third factory. Do not merge the
+investigative snapshot merely to obtain its factories.
 No installation, main branch update, push, HEART change, or scientific node
 implementation change is part of this backport preparation.
