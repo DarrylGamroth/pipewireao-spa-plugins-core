@@ -23,6 +23,11 @@
 #define FRAME_BYTES (PIXELS * sizeof(float))
 
 struct capture {
+	struct spa_node *node;
+	uint64_t node_flags;
+	bool start_on_ready;
+	unsigned int start_attempts;
+	int start_result;
 	uint32_t expected;
 	uint8_t storage[4096];
 	struct spa_pod *param;
@@ -61,9 +66,25 @@ static void on_result(void *data, int seq SPA_UNUSED, int result,
 	capture->param = (struct spa_pod *)capture->storage;
 }
 
+static void on_info(void *data, const struct spa_node_info *info)
+{
+	struct capture *capture = data;
+
+	if (info != NULL && (info->change_mask & SPA_NODE_CHANGE_MASK_FLAGS)) {
+		capture->node_flags = info->flags;
+		if (capture->start_on_ready &&
+				!(info->flags & SPA_NODE_FLAG_NEED_CONFIGURE)) {
+			struct spa_command start = SPA_NODE_COMMAND_INIT(SPA_NODE_COMMAND_Start);
+			capture->start_attempts++;
+			capture->start_result = spa_node_send_command(capture->node, &start);
+		}
+	}
+}
+
 static const struct spa_node_events events = {
 	.version = SPA_VERSION_NODE_EVENTS,
 	.result = on_result,
+	.info = on_info,
 };
 
 static const struct spa_handle_factory *find_factory(
@@ -88,6 +109,7 @@ static void make_node(struct instance *instance,
 	spa_assert_se(factory->init(factory, instance->handle, info, NULL, 0) == 0);
 	spa_assert_se(spa_handle_get_interface(instance->handle,
 			SPA_TYPE_INTERFACE_Node, (void **)&instance->node) == 0);
+	instance->capture.node = instance->node;
 	spa_assert_se(spa_node_add_listener(instance->node, &instance->listener,
 			&events, &instance->capture) == 0);
 }
@@ -394,19 +416,35 @@ static void test_video_view(const struct spa_handle_factory *factory)
 				SPA_FORMAT_NDARRAY_schema),
 				"org.calculon.ao.raw-detector-pixels/1"));
 		configure(&view, SPA_DIRECTION_OUTPUT, 0);
+		spa_assert_se(spa_node_send_command(view.node, &start) == -EIO);
+		spa_assert_se(view.capture.node_flags & SPA_NODE_FLAG_NEED_CONFIGURE);
 
 		init_buffer(&input, PIXELS * sizeof(uint16_t),
 				WIDTH * sizeof(uint16_t));
 		init_buffer(&output, PIXELS * sizeof(uint16_t),
 				WIDTH * sizeof(uint16_t));
 		memset(output.payload, 0xa5, sizeof(output.payload));
-		use_buffer(&view, SPA_DIRECTION_INPUT, &input);
-		use_buffer_flags(&view, SPA_DIRECTION_OUTPUT, &output,
-				shared ? SPA_NODE_BUFFERS_FLAG_ALLOC : 0);
+		if (!shared) {
+			use_buffer(&view, SPA_DIRECTION_INPUT, &input);
+			use_buffer_flags(&view, SPA_DIRECTION_OUTPUT, &output, 0);
+			spa_assert_se(view.capture.node_flags & SPA_NODE_FLAG_NEED_CONFIGURE);
+		}
 		spa_assert_se(spa_node_port_set_io(view.node, SPA_DIRECTION_INPUT, 0,
 				SPA_IO_Buffers, &input_io, sizeof(input_io)) == 0);
 		spa_assert_se(spa_node_port_set_io(view.node, SPA_DIRECTION_OUTPUT, 0,
 				SPA_IO_Buffers, &output_io, sizeof(output_io)) == 0);
+		if (shared) {
+			spa_assert_se(view.capture.node_flags & SPA_NODE_FLAG_NEED_CONFIGURE);
+			view.capture.start_on_ready = true;
+			use_buffer(&view, SPA_DIRECTION_INPUT, &input);
+			spa_assert_se(view.capture.start_attempts == 0);
+			use_buffer_flags(&view, SPA_DIRECTION_OUTPUT, &output,
+					SPA_NODE_BUFFERS_FLAG_ALLOC);
+			spa_assert_se(view.capture.start_attempts == 1);
+			spa_assert_se(view.capture.start_result == 0);
+			view.capture.start_on_ready = false;
+		}
+		spa_assert_se(!(view.capture.node_flags & SPA_NODE_FLAG_NEED_CONFIGURE));
 		spa_assert_se(spa_node_send_command(view.node, &start) == 0);
 
 		for (i = 0; i < PIXELS; i++)
@@ -438,6 +476,15 @@ static void test_video_view(const struct spa_handle_factory *factory)
 		}
 
 		spa_assert_se(spa_node_send_command(view.node, &pause) == 0);
+		spa_assert_se(spa_node_port_set_io(view.node, SPA_DIRECTION_INPUT, 0,
+				SPA_IO_Buffers, NULL, 0) == 0);
+		spa_assert_se(view.capture.node_flags & SPA_NODE_FLAG_NEED_CONFIGURE);
+		spa_assert_se(spa_node_port_set_io(view.node, SPA_DIRECTION_INPUT, 0,
+				SPA_IO_Buffers, &input_io, sizeof(input_io)) == 0);
+		spa_assert_se(!(view.capture.node_flags & SPA_NODE_FLAG_NEED_CONFIGURE));
+		spa_assert_se(spa_node_port_use_buffers(view.node, SPA_DIRECTION_OUTPUT, 0,
+				0, NULL, 0) == 0);
+		spa_assert_se(view.capture.node_flags & SPA_NODE_FLAG_NEED_CONFIGURE);
 		destroy(&view);
 	}
 }

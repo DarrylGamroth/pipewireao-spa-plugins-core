@@ -34,6 +34,20 @@ fn id(value: u32) -> Value {
     Value::Id(Id(value))
 }
 
+pub(crate) fn position_io() -> Value {
+    object(
+        sys::SPA_TYPE_OBJECT_ParamIO,
+        sys::SPA_PARAM_IO,
+        vec![
+            property(sys::SPA_PARAM_IO_id, id(sys::SPA_IO_Position)),
+            property(
+                sys::SPA_PARAM_IO_size,
+                Value::Int(size_of::<sys::spa_io_position>() as i32),
+            ),
+        ],
+    )
+}
+
 fn int_range(default: i32, min: i32, max: i32) -> Value {
     Value::Choice(ChoiceValue::Int(Choice(
         ChoiceFlags::empty(),

@@ -21,6 +21,9 @@ pub trait Node: Send + Sized + 'static {
     /// Whether the node exposes `PropInfo` and `Props` parameters.
     const HAS_PROPS: bool = false;
 
+    /// Whether the node consumes graph Position I/O.
+    const NEEDS_POSITION: bool = false;
+
     /// Constructs one factory instance.
     fn new(info: Option<&sys::spa_dict>) -> Result<Self, i32>;
 
@@ -43,6 +46,11 @@ pub trait Node: Send + Sized + 'static {
         _value: Option<Value>,
         _started: bool,
     ) -> Result<(), i32> {
+        Err(-libc::ENOENT)
+    }
+
+    /// Installs node-level I/O selected by this implementation.
+    fn set_io(&mut self, _id: u32, _data: *mut c_void, _size: usize) -> Result<(), i32> {
         Err(-libc::ENOENT)
     }
 
@@ -76,7 +84,8 @@ pub trait Node: Send + Sized + 'static {
 struct State<N> {
     node: N,
     started: bool,
-    params: [sys::spa_param_info; 2],
+    params: [sys::spa_param_info; 3],
+    n_params: u32,
 }
 
 /// Serializes callbacks without making a real-time caller wait.
@@ -130,17 +139,23 @@ impl<T> Drop for CallbackGuard<'_, T> {
 
 impl<N: Node> State<N> {
     fn new(node: N) -> Self {
+        let mut params = [param_info(0, 0); 3];
+        let mut n_params = 0;
+        if N::HAS_PROPS {
+            params[0] = param_info(sys::SPA_PARAM_PropInfo, sys::SPA_PARAM_INFO_READ);
+            params[1] = param_info(sys::SPA_PARAM_Props, sys::SPA_PARAM_INFO_READWRITE);
+            n_params = 2;
+        }
+        params[n_params] = param_info(sys::SPA_PARAM_IO, sys::SPA_PARAM_INFO_READ);
         Self {
             node,
             started: false,
-            params: [
-                param_info(sys::SPA_PARAM_PropInfo, sys::SPA_PARAM_INFO_READ),
-                param_info(sys::SPA_PARAM_Props, sys::SPA_PARAM_INFO_READWRITE),
-            ],
+            params,
+            n_params: (n_params + 1) as u32,
         }
     }
 
-    fn node_info(&mut self) -> sys::spa_node_info {
+    fn node_info(&self) -> NodeInfoSnapshot {
         let input_count = self
             .node
             .ports()
@@ -148,22 +163,18 @@ impl<N: Node> State<N> {
             .filter(|port| port.key.direction == sys::SPA_DIRECTION_INPUT)
             .count();
         let output_count = self.node.ports().len() - input_count;
-        sys::spa_node_info {
+        let info = sys::spa_node_info {
             max_input_ports: input_count as u32,
             max_output_ports: output_count as u32,
             change_mask: 0,
             flags: self.node_flags(),
             props: ptr::null_mut(),
-            params: if N::HAS_PROPS {
-                self.params.as_mut_ptr()
-            } else {
-                ptr::null_mut()
-            },
-            n_params: if N::HAS_PROPS {
-                self.params.len() as u32
-            } else {
-                0
-            },
+            params: ptr::null_mut(),
+            n_params: self.n_params,
+        };
+        NodeInfoSnapshot {
+            info,
+            params: self.params,
         }
     }
 
@@ -173,7 +184,7 @@ impl<N: Node> State<N> {
             .node
             .ports()
             .iter()
-            .any(|port| port.required && port.format.is_none())
+            .any(|port| (port.required || port.format.is_some()) && !port.ready())
         {
             flags |= sys::SPA_NODE_FLAG_NEED_CONFIGURE as u64;
         }
@@ -193,11 +204,49 @@ impl<N: Node> State<N> {
     }
 }
 
+// Event callbacks receive callback-scoped records. These copies keep parameter
+// pointers independent of State after releasing its callback gate.
+struct NodeInfoSnapshot {
+    info: sys::spa_node_info,
+    params: [sys::spa_param_info; 3],
+}
+
+impl NodeInfoSnapshot {
+    fn info(&mut self) -> *const sys::spa_node_info {
+        self.info.params = self.params.as_mut_ptr();
+        ptr::from_ref(&self.info)
+    }
+}
+
+struct PortInfoSnapshot {
+    key: PortRef,
+    info: sys::spa_port_info,
+    params: [sys::spa_param_info; 5],
+}
+
+impl PortInfoSnapshot {
+    fn new(port: &Port) -> Self {
+        let mut info = port.info;
+        info.params = ptr::null_mut();
+        Self {
+            key: port.key,
+            info,
+            params: port.params,
+        }
+    }
+
+    fn info(&mut self) -> *const sys::spa_port_info {
+        self.info.params = self.params.as_mut_ptr();
+        self.info.n_params = self.params.len() as u32;
+        ptr::from_ref(&self.info)
+    }
+}
+
 #[repr(C)]
 struct Handle<N: Node> {
     handle: sys::spa_handle,
     node: sys::spa_node,
-    hooks: sys::spa_hook_list,
+    hooks: UnsafeCell<sys::spa_hook_list>,
     state: ManuallyDrop<CallbackGate<State<N>>>,
 }
 
@@ -267,8 +316,12 @@ fn ffi_result(operation: impl FnOnce() -> Result<i32, i32>) -> i32 {
     }
 }
 
-unsafe fn instance_mut<'a, N: Node>(object: *mut c_void) -> Result<&'a mut Handle<N>, i32> {
-    unsafe { object.cast::<Handle<N>>().as_mut() }.ok_or(-libc::EINVAL)
+unsafe fn instance_ref<'a, N: Node>(object: *mut c_void) -> Result<&'a Handle<N>, i32> {
+    unsafe { object.cast::<Handle<N>>().as_ref() }.ok_or(-libc::EINVAL)
+}
+
+fn hooks<N: Node>(instance: &Handle<N>) -> *mut sys::spa_hook_list {
+    instance.hooks.get()
 }
 
 fn claim<N: Node>(instance: &Handle<N>) -> Result<CallbackGuard<'_, State<N>>, i32> {
@@ -399,11 +452,11 @@ unsafe extern "C" fn factory_init<N: Node>(
                         },
                     },
                 },
-                hooks: std::mem::zeroed(),
+                hooks: UnsafeCell::new(std::mem::zeroed()),
                 state: ManuallyDrop::new(CallbackGate::new(State::new(N::new(info.as_ref())?))),
             },
         );
-        sys::spa_hook_list_init(&mut (*instance).hooks);
+        sys::spa_hook_list_init((*instance).hooks.get());
         Ok(0)
     })
 }
@@ -465,41 +518,32 @@ unsafe extern "C" fn node_add_listener<N: Node>(
     data: *mut c_void,
 ) -> i32 {
     ffi_result(|| unsafe {
-        let instance = instance_mut::<N>(object)?;
+        let instance = instance_ref::<N>(object)?;
         if listener.is_null() || events.is_null() {
             return Err(-libc::EINVAL);
         }
         let (mut node_info, port_info) = {
-            let mut state = claim(instance)?;
+            let state = claim(instance)?;
             let node_info = state.node_info();
-            let ports = state.node.ports_mut();
-            let port_info = ports
-                .iter_mut()
-                .map(|port| {
-                    port.info.params = port.params.as_mut_ptr();
-                    port.info.n_params = port.params.len() as u32;
-                    (port.key, port.info)
-                })
+            let port_info = state
+                .node
+                .ports()
+                .iter()
+                .map(PortInfoSnapshot::new)
                 .collect::<Vec<_>>();
             (node_info, port_info)
         };
         let mut saved = std::mem::zeroed();
-        sys::spa_hook_list_isolate(
-            &mut instance.hooks,
-            &mut saved,
-            listener,
-            events.cast(),
-            data,
-        );
-        node_info.change_mask =
+        sys::spa_hook_list_isolate(hooks(instance), &mut saved, listener, events.cast(), data);
+        node_info.info.change_mask =
             (sys::SPA_NODE_CHANGE_MASK_FLAGS | sys::SPA_NODE_CHANGE_MASK_PARAMS) as u64;
-        emit_node_info(&mut instance.hooks, &node_info);
-        for (key, mut info) in port_info {
-            info.change_mask =
+        emit_node_info(hooks(instance), node_info.info());
+        for mut info in port_info {
+            info.info.change_mask =
                 (sys::SPA_PORT_CHANGE_MASK_FLAGS | sys::SPA_PORT_CHANGE_MASK_PARAMS) as u64;
-            emit_port_info(&mut instance.hooks, key, &info);
+            emit_port_info(hooks(instance), info.key, info.info());
         }
-        sys::spa_hook_list_join(&mut instance.hooks, &mut saved);
+        sys::spa_hook_list_join(hooks(instance), &mut saved);
         Ok(0)
     })
 }
@@ -510,9 +554,21 @@ unsafe extern "C" fn node_set_callbacks<N: Node>(
     _data: *mut c_void,
 ) -> i32 {
     ffi_result(|| unsafe {
-        instance_mut::<N>(object)?;
+        instance_ref::<N>(object)?;
         Ok(0)
     })
+}
+
+fn generic_or_node_param<N: Node>(
+    instance: &Handle<N>,
+    id: u32,
+    index: u32,
+) -> Result<Option<Value>, i32> {
+    match (id, index) {
+        (sys::SPA_PARAM_IO, 0) => Ok(Some(pod::position_io())),
+        (sys::SPA_PARAM_IO, _) => Ok(None),
+        _ => claim(instance)?.node.enum_param(id, index),
+    }
 }
 
 unsafe extern "C" fn node_enum_params<N: Node>(
@@ -527,18 +583,15 @@ unsafe extern "C" fn node_enum_params<N: Node>(
         if max == 0 {
             return Err(-libc::EINVAL);
         }
-        let instance = instance_mut::<N>(object)?;
+        let instance = instance_ref::<N>(object)?;
         let mut index = start;
         let mut emitted = 0;
         while emitted < max {
-            let value = {
-                let state = claim(instance)?;
-                state.node.enum_param(id, index)?
-            };
+            let value = generic_or_node_param(instance, id, index)?;
             let Some(value) = value else {
                 break;
             };
-            if emit_param(&mut instance.hooks, seq, id, index, &value, filter)? {
+            if emit_param(hooks(instance), seq, id, index, &value, filter)? {
                 emitted += 1;
             }
             index += 1;
@@ -554,7 +607,7 @@ unsafe extern "C" fn node_set_param<N: Node>(
     param: *const sys::spa_pod,
 ) -> i32 {
     ffi_result(|| unsafe {
-        let instance = instance_mut::<N>(object)?;
+        let instance = instance_ref::<N>(object)?;
         let value = if param.is_null() {
             None
         } else {
@@ -569,13 +622,25 @@ unsafe extern "C" fn node_set_param<N: Node>(
 
 unsafe extern "C" fn node_set_io<N: Node>(
     object: *mut c_void,
-    _id: u32,
-    _data: *mut c_void,
-    _size: usize,
+    id: u32,
+    data: *mut c_void,
+    size: usize,
 ) -> i32 {
     ffi_result(|| unsafe {
-        instance_mut::<N>(object)?;
-        Err(-libc::ENOTSUP)
+        let instance = instance_ref::<N>(object)?;
+        if id != sys::SPA_IO_Position {
+            return Err(-libc::ENOENT);
+        }
+        if !data.is_null() && size < size_of::<sys::spa_io_position>() {
+            return Err(-libc::ENOSPC);
+        }
+        // Nonconsumers acknowledge the graph driver without retaining its IO.
+        if !N::NEEDS_POSITION {
+            return Ok(0);
+        }
+        let mut state = claim(instance)?;
+        state.node.set_io(id, data, size)?;
+        Ok(0)
     })
 }
 
@@ -584,7 +649,7 @@ unsafe extern "C" fn node_send_command<N: Node>(
     command: *const sys::spa_command,
 ) -> i32 {
     ffi_result(|| unsafe {
-        let instance = instance_mut::<N>(object)?;
+        let instance = instance_ref::<N>(object)?;
         if command.is_null() {
             return Err(-libc::EINVAL);
         }
@@ -618,7 +683,7 @@ unsafe extern "C" fn node_add_port<N: Node>(
     _props: *const sys::spa_dict,
 ) -> i32 {
     ffi_result(|| unsafe {
-        instance_mut::<N>(object)?;
+        instance_ref::<N>(object)?;
         Err(-libc::ENOTSUP)
     })
 }
@@ -629,7 +694,7 @@ unsafe extern "C" fn node_remove_port<N: Node>(
     _port_id: u32,
 ) -> i32 {
     ffi_result(|| unsafe {
-        instance_mut::<N>(object)?;
+        instance_ref::<N>(object)?;
         Err(-libc::ENOTSUP)
     })
 }
@@ -655,7 +720,7 @@ unsafe extern "C" fn node_port_enum_params<N: Node>(
         if max == 0 {
             return Err(-libc::EINVAL);
         }
-        let instance = instance_mut::<N>(object)?;
+        let instance = instance_ref::<N>(object)?;
         let mut index = start;
         let mut emitted = 0;
         while emitted < max {
@@ -673,7 +738,7 @@ unsafe extern "C" fn node_port_enum_params<N: Node>(
             let Some(value) = value else {
                 break;
             };
-            if emit_param(&mut instance.hooks, seq, id, index, &value, filter)? {
+            if emit_param(hooks(instance), seq, id, index, &value, filter)? {
                 emitted += 1;
             }
             index += 1;
@@ -694,7 +759,7 @@ unsafe extern "C" fn node_port_set_param<N: Node>(
         if id != sys::SPA_PARAM_Format {
             return Err(-libc::ENOENT);
         }
-        let instance = instance_mut::<N>(object)?;
+        let instance = instance_ref::<N>(object)?;
         let mut state = claim(instance)?;
         let index = port_index(&state.node, direction, port_id)?;
         let previous_node_flags = state.node_flags();
@@ -734,6 +799,12 @@ unsafe extern "C" fn node_port_set_param<N: Node>(
                 port.format = previous;
                 port.update_format_params();
                 let _ = state.node.format_changed(index);
+                let info = (state.node_flags() != previous_node_flags).then(|| state.node_info());
+                drop(state);
+                if let Some(mut info) = info {
+                    info.info.change_mask = sys::SPA_NODE_CHANGE_MASK_FLAGS as u64;
+                    emit_node_info(hooks(instance), info.info());
+                }
                 return Err(error);
             }
         }
@@ -744,8 +815,6 @@ unsafe extern "C" fn node_port_set_param<N: Node>(
                 .iter_mut()
                 .enumerate()
                 .filter_map(|(port_index, port)| {
-                    port.info.params = port.params.as_mut_ptr();
-                    port.info.n_params = port.params.len() as u32;
                     let mut change_mask = 0;
                     if port_index == index {
                         change_mask |= sys::SPA_PORT_CHANGE_MASK_PARAMS as u64;
@@ -754,21 +823,21 @@ unsafe extern "C" fn node_port_set_param<N: Node>(
                         change_mask |= sys::SPA_PORT_CHANGE_MASK_FLAGS as u64;
                     }
                     (change_mask != 0).then(|| {
-                        let mut info = port.info;
-                        info.change_mask = change_mask;
-                        (port.key, info)
+                        let mut info = PortInfoSnapshot::new(port);
+                        info.info.change_mask = change_mask;
+                        info
                     })
                 })
                 .collect::<Vec<_>>()
         };
         let node_info = (state.node_flags() != previous_node_flags).then(|| state.node_info());
         drop(state);
-        for (key, info) in port_infos {
-            emit_port_info(&mut instance.hooks, key, &info);
+        for mut info in port_infos {
+            emit_port_info(hooks(instance), info.key, info.info());
         }
         if let Some(mut info) = node_info {
-            info.change_mask = sys::SPA_NODE_CHANGE_MASK_FLAGS as u64;
-            emit_node_info(&mut instance.hooks, &info);
+            info.info.change_mask = sys::SPA_NODE_CHANGE_MASK_FLAGS as u64;
+            emit_node_info(hooks(instance), info.info());
         }
         Ok(0)
     })
@@ -783,14 +852,21 @@ unsafe extern "C" fn node_port_use_buffers<N: Node>(
     n_buffers: u32,
 ) -> i32 {
     ffi_result(|| unsafe {
-        let instance = instance_mut::<N>(object)?;
+        let instance = instance_ref::<N>(object)?;
         let mut state = claim(instance)?;
         let index = port_index(&state.node, direction, port_id)?;
+        let previous_node_flags = state.node_flags();
         if state.started {
             return Err(-libc::EBUSY);
         }
         if n_buffers == 0 {
             state.node.ports_mut()[index].clear_buffers();
+            let info = (state.node_flags() != previous_node_flags).then(|| state.node_info());
+            drop(state);
+            if let Some(mut info) = info {
+                info.info.change_mask = sys::SPA_NODE_CHANGE_MASK_FLAGS as u64;
+                emit_node_info(hooks(instance), info.info());
+            }
             return Ok(0);
         }
         if buffers.is_null() || n_buffers as usize > MAX_BUFFERS {
@@ -869,6 +945,12 @@ unsafe extern "C" fn node_port_use_buffers<N: Node>(
             port.buffers[buffer_index].available = direction == sys::SPA_DIRECTION_OUTPUT;
         }
         port.n_buffers = supplied.len();
+        let info = (state.node_flags() != previous_node_flags).then(|| state.node_info());
+        drop(state);
+        if let Some(mut info) = info {
+            info.info.change_mask = sys::SPA_NODE_CHANGE_MASK_FLAGS as u64;
+            emit_node_info(hooks(instance), info.info());
+        }
         Ok(0)
     })
 }
@@ -882,14 +964,21 @@ unsafe extern "C" fn node_port_set_io<N: Node>(
     size: usize,
 ) -> i32 {
     ffi_result(|| unsafe {
-        let instance = instance_mut::<N>(object)?;
+        let instance = instance_ref::<N>(object)?;
         let mut state = claim(instance)?;
         let index = port_index(&state.node, direction, port_id)?;
+        let previous_node_flags = state.node_flags();
         if state.started {
             return Err(-libc::EBUSY);
         }
         let port = &mut state.node.ports_mut()[index];
         port.set_io(id, data, size)?;
+        let info = (state.node_flags() != previous_node_flags).then(|| state.node_info());
+        drop(state);
+        if let Some(mut info) = info {
+            info.info.change_mask = sys::SPA_NODE_CHANGE_MASK_FLAGS as u64;
+            emit_node_info(hooks(instance), info.info());
+        }
         Ok(0)
     })
 }
@@ -900,7 +989,7 @@ unsafe extern "C" fn node_port_reuse_buffer<N: Node>(
     buffer_id: u32,
 ) -> i32 {
     ffi_result(|| unsafe {
-        let instance = instance_mut::<N>(object)?;
+        let instance = instance_ref::<N>(object)?;
         let mut state = claim(instance)?;
         let index = port_index(&state.node, sys::SPA_DIRECTION_OUTPUT, port_id)?;
         let port = &mut state.node.ports_mut()[index];
@@ -914,7 +1003,7 @@ unsafe extern "C" fn node_port_reuse_buffer<N: Node>(
 
 unsafe extern "C" fn node_process<N: Node>(object: *mut c_void) -> i32 {
     ffi_result(|| unsafe {
-        let instance = instance_mut::<N>(object)?;
+        let instance = instance_ref::<N>(object)?;
         let mut state = claim(instance)?;
         if !state.started {
             return Ok(sys::SPA_STATUS_NEED_DATA as i32);
@@ -925,7 +1014,18 @@ unsafe extern "C" fn node_process<N: Node>(object: *mut c_void) -> i32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{CallbackGate, ffi_result};
+    use std::cell::UnsafeCell;
+    use std::ffi::c_void;
+    use std::mem::ManuallyDrop;
+    use std::ptr;
+
+    use libspa::sys;
+
+    use super::{
+        CallbackGate, Handle, Methods, Node, State, claim, ffi_result, node_add_listener,
+        node_port_set_param, node_set_io,
+    };
+    use crate::{Format, Port, PortRef};
 
     #[test]
     fn callback_gate_never_waits_for_an_active_callback() {
@@ -940,5 +1040,248 @@ mod tests {
     #[test]
     fn callback_panics_are_contained_as_io_errors() {
         assert_eq!(ffi_result(|| panic!("test callback panic")), -libc::EIO);
+    }
+
+    struct TestNode {
+        ports: [Port; 2],
+        reject_format_withdrawal: bool,
+    }
+
+    impl Node for TestNode {
+        fn new(_: Option<&sys::spa_dict>) -> Result<Self, i32> {
+            Ok(Self {
+                ports: [
+                    Port::new(
+                        PortRef {
+                            direction: sys::SPA_DIRECTION_INPUT,
+                            id: 0,
+                        },
+                        true,
+                        false,
+                        [],
+                    ),
+                    Port::new(
+                        PortRef {
+                            direction: sys::SPA_DIRECTION_OUTPUT,
+                            id: 0,
+                        },
+                        true,
+                        false,
+                        [],
+                    ),
+                ],
+                reject_format_withdrawal: false,
+            })
+        }
+        fn ports(&self) -> &[Port] {
+            &self.ports
+        }
+        fn ports_mut(&mut self) -> &mut [Port] {
+            &mut self.ports
+        }
+        fn format_changed(&mut self, port: usize) -> Result<(), i32> {
+            if self.reject_format_withdrawal && self.ports[port].format.is_none() {
+                Err(-libc::EINVAL)
+            } else {
+                Ok(())
+            }
+        }
+        fn process(&mut self) -> Result<i32, i32> {
+            Ok(sys::SPA_STATUS_NEED_DATA as i32)
+        }
+    }
+
+    fn test_handle<N: Node>(node: N) -> Box<Handle<N>> {
+        let handle = Box::new(Handle {
+            handle: unsafe { std::mem::zeroed() },
+            node: sys::spa_node {
+                iface: sys::spa_interface {
+                    type_: ptr::null(),
+                    version: sys::SPA_VERSION_NODE,
+                    cb: sys::spa_callbacks {
+                        funcs: ptr::from_ref(&Methods::<N>::VALUE).cast(),
+                        data: ptr::null_mut(),
+                    },
+                },
+            },
+            hooks: UnsafeCell::new(unsafe { std::mem::zeroed() }),
+            state: ManuallyDrop::new(CallbackGate::new(State::new(node))),
+        });
+        unsafe { sys::spa_hook_list_init(handle.hooks.get()) };
+        handle
+    }
+
+    #[test]
+    fn failed_format_change_publishes_buffer_withdrawal() {
+        unsafe extern "C" fn on_info(data: *mut c_void, info: *const sys::spa_node_info) {
+            let flags = unsafe { &mut *data.cast::<u64>() };
+            let info = unsafe { &*info };
+            if info.change_mask & sys::SPA_NODE_CHANGE_MASK_FLAGS as u64 != 0 {
+                *flags = info.flags;
+            }
+        }
+
+        let mut handle = test_handle(TestNode::new(None).unwrap());
+        let object = ptr::from_mut(handle.as_mut()).cast::<c_void>();
+        let mut io: sys::spa_io_buffers = unsafe { std::mem::zeroed() };
+        let format = Format::f32_image("org.calculon.test/1", 4, 3, None).unwrap();
+        {
+            let mut state = claim(handle.as_ref()).unwrap();
+            state.node.reject_format_withdrawal = true;
+            for port in state.node.ports_mut() {
+                port.format = Some(format.clone());
+                port.n_buffers = 1;
+                port.io = ptr::from_mut(&mut io);
+            }
+            assert!(state.ready().is_ok());
+        }
+        let mut flags = 0_u64;
+        let mut listener: sys::spa_hook = unsafe { std::mem::zeroed() };
+        let mut events: sys::spa_node_events = unsafe { std::mem::zeroed() };
+        events.version = sys::SPA_VERSION_NODE_EVENTS;
+        events.info = Some(on_info);
+        assert_eq!(
+            unsafe {
+                node_add_listener::<TestNode>(
+                    object,
+                    &mut listener,
+                    &events,
+                    ptr::from_mut(&mut flags).cast(),
+                )
+            },
+            0
+        );
+        assert_eq!(flags & sys::SPA_NODE_FLAG_NEED_CONFIGURE as u64, 0);
+        assert_eq!(
+            unsafe {
+                node_port_set_param::<TestNode>(
+                    object,
+                    sys::SPA_DIRECTION_INPUT,
+                    0,
+                    sys::SPA_PARAM_Format,
+                    0,
+                    ptr::null(),
+                )
+            },
+            -libc::EINVAL
+        );
+        {
+            let state = claim(handle.as_ref()).unwrap();
+            assert_eq!(state.node.ports()[0].format.as_ref(), Some(&format));
+            assert_eq!(state.node.ports()[0].n_buffers, 0);
+            assert_eq!(state.ready(), Err(-libc::EIO));
+        }
+        assert_ne!(flags & sys::SPA_NODE_FLAG_NEED_CONFIGURE as u64, 0);
+        unsafe {
+            sys::spa_hook_remove(&mut listener);
+            ManuallyDrop::drop(&mut handle.state);
+        }
+    }
+
+    #[test]
+    fn unused_position_io_is_acknowledged_and_validated() {
+        let mut handle = test_handle(TestNode::new(None).unwrap());
+        {
+            let state = claim(handle.as_ref()).unwrap();
+            assert_eq!(state.n_params, 1);
+            assert_eq!(state.params[0].id, sys::SPA_PARAM_IO);
+        }
+        let object = ptr::from_mut(handle.as_mut()).cast::<c_void>();
+        let mut position: sys::spa_io_position = unsafe { std::mem::zeroed() };
+        let data = ptr::from_mut(&mut position).cast();
+        let size = std::mem::size_of_val(&position);
+        assert_eq!(
+            unsafe { node_set_io::<TestNode>(object, sys::SPA_IO_Position, data, size) },
+            0
+        );
+        assert_eq!(
+            unsafe { node_set_io::<TestNode>(object, sys::SPA_IO_Position, data, size - 1) },
+            -libc::ENOSPC
+        );
+        assert_eq!(
+            unsafe { node_set_io::<TestNode>(object, sys::SPA_IO_Position, ptr::null_mut(), 0) },
+            0
+        );
+        assert_eq!(
+            unsafe { node_set_io::<TestNode>(object, sys::SPA_IO_Clock, data, size) },
+            -libc::ENOENT
+        );
+        assert!(
+            super::generic_or_node_param(handle.as_ref(), sys::SPA_PARAM_IO, 0)
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            super::generic_or_node_param(handle.as_ref(), sys::SPA_PARAM_IO, 1)
+                .unwrap()
+                .is_none()
+        );
+        unsafe { ManuallyDrop::drop(&mut handle.state) };
+    }
+
+    #[test]
+    fn position_consumers_receive_setup_clear_and_returned_errors() {
+        struct Consumer {
+            calls: usize,
+            position: usize,
+        }
+        impl Node for Consumer {
+            const HAS_PROPS: bool = true;
+            const NEEDS_POSITION: bool = true;
+            fn new(_: Option<&sys::spa_dict>) -> Result<Self, i32> {
+                Ok(Self {
+                    calls: 0,
+                    position: 0,
+                })
+            }
+            fn ports(&self) -> &[Port] {
+                &[]
+            }
+            fn ports_mut(&mut self) -> &mut [Port] {
+                &mut []
+            }
+            fn set_io(&mut self, id: u32, data: *mut c_void, _: usize) -> Result<(), i32> {
+                assert_eq!(id, sys::SPA_IO_Position);
+                self.calls += 1;
+                self.position = data as usize;
+                if data.is_null() {
+                    Err(-libc::EIO)
+                } else {
+                    Ok(())
+                }
+            }
+            fn process(&mut self) -> Result<i32, i32> {
+                Ok(sys::SPA_STATUS_NEED_DATA as i32)
+            }
+        }
+        let mut handle = test_handle(Consumer::new(None).unwrap());
+        {
+            let state = claim(handle.as_ref()).unwrap();
+            assert_eq!(state.n_params, 3);
+            assert_eq!(state.params[0].id, sys::SPA_PARAM_PropInfo);
+            assert_eq!(state.params[1].id, sys::SPA_PARAM_Props);
+            assert_eq!(state.params[2].id, sys::SPA_PARAM_IO);
+        }
+        let object = ptr::from_mut(handle.as_mut()).cast::<c_void>();
+        let mut position: sys::spa_io_position = unsafe { std::mem::zeroed() };
+        let data = ptr::from_mut(&mut position).cast();
+        let size = std::mem::size_of_val(&position);
+        assert_eq!(
+            unsafe { node_set_io::<Consumer>(object, sys::SPA_IO_Position, data, size) },
+            0
+        );
+        assert_eq!(claim(handle.as_ref()).unwrap().node.position, data as usize);
+        assert_eq!(
+            unsafe { node_set_io::<Consumer>(object, sys::SPA_IO_Position, data, size - 1) },
+            -libc::ENOSPC
+        );
+        assert_eq!(claim(handle.as_ref()).unwrap().node.calls, 1);
+        assert_eq!(
+            unsafe { node_set_io::<Consumer>(object, sys::SPA_IO_Position, ptr::null_mut(), 0) },
+            -libc::EIO
+        );
+        assert_eq!(claim(handle.as_ref()).unwrap().node.calls, 2);
+        assert_eq!(claim(handle.as_ref()).unwrap().node.position, 0);
+        unsafe { ManuallyDrop::drop(&mut handle.state) };
     }
 }
