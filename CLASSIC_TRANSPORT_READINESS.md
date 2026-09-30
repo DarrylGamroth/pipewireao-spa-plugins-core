@@ -9,10 +9,14 @@ its pre-existing local changes remain untouched. No investigative snapshot
 or latest-hold implementation is included.
 
 The behavioral changes are ported from reviewed investigative commits
-`4d0be46` and `900452c`. This clean backport has not yet been built or tested:
-the initial preparation took place during the exclusive capacity campaign.
-Successful tests and five receiving-path qualifications of the prior
-snapshot-based candidate do not constitute qualification of this backport.
+`4d0be46` and `900452c`. Preparation took place during the exclusive capacity
+campaign. The clean backport's software verification was then executed in an
+authorized build pause at source commit `fefc8f3`: 14 wrapper tests, 5 ndarray
+tests, the full C regression, and the export check passed. Its release DSO is
+preserved in `evidence/libspa-ndarray-clean.so` with SHA-256
+`153839f352590a992655f327ef892c1dff3595ab9fbe80f183ed2aeb7ec6458c`.
+Connected source and receiving-path qualification of this binary remains
+pending. Prior snapshot-based qualifications do not validate the clean binary.
 
 ## Readiness
 
@@ -84,21 +88,34 @@ during callbacks. Capture fields use `Cell`, avoiding an exclusive Rust borrow
 across recursion. Callback-scoped pointers are never used after callback return.
 This is a reentrancy regression, not a concurrent listener-mutation test.
 
-After the measurement hold ends, run the wrapper and ndarray test suites,
-build the release ndarray plugin, and run the C regression against that
-exact binary. Connected FITS source qualification remains necessary before
-calling the clean backport qualified. The previously frozen private plugin
-directory must remain unchanged while its measurements are in progress.
-The focused regression and all clean-backport runtime verification remain
-unexecuted during the capacity hold; preparing or formatting tests is not a
-pass result.
+The focused snapshot regression passed, failed with exit 101 under a temporary
+negative control that emitted live State array pointers, and passed again
+after exact source restoration. The video-view C function also failed on the
+preserved pre-fix installed DSO's missing NEED_CONFIGURE flag and passed against
+the clean DSO. Its focused main retains the same video-view assertions. The
+full C comparison against that old installed DSO stops earlier on its different
+shared-chunk behavior, so that earlier failure is not readiness evidence.
+
+Commands, environment, logs, exit statuses and hashes are retained under
+`evidence/`, with `evidence/clean-verification.json` as the index. All builds
+and tests used CPU 14 and Cargo used one build job. An initial manual C compile
+omitted the project's `-D_GNU_SOURCE`; the corrected command matches Meson's
+feature macro and passed without source changes. The inherited libspa header
+unused-parameter warning remains. The negative control was restored and its
+binary was not used for C qualification or preserved as a deployment candidate.
+
+Connected FITS source and receiving-path qualification remain necessary before
+calling the clean backport qualified. No timing/capacity or hardware claim,
+live UDP run, main branch update, installation or push follows from these
+software checks. The prior frozen private plugin directory remains unchanged.
 
 ## Delivery boundary
 
 This clean baseline retains its existing two ndarray factories. The original
 dirty owner and previously qualified binary contain a pre-existing third
 factory. Integration with that local work and installation must preserve the
-intended deployed factory set. Do not replace it with this unqualified clean
-binary or merge the investigative snapshot merely to obtain its factories.
+intended deployed factory set. Do not replace it with this software-tested but
+not yet source-qualified clean binary or merge the investigative snapshot
+merely to obtain its factories.
 No installation, main branch update, push, HEART change, or scientific node
 implementation change is part of this backport preparation.
