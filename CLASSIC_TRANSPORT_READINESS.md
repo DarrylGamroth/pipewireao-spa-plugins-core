@@ -55,8 +55,10 @@ and generic IO enumeration are the only additional parameter dependencies.
 
 The established C video-view regression is carried unchanged from the
 reviewed readiness patch. It checks format-only Start returning `-EIO`,
-IO-last and buffers-last readiness, pool/IO withdrawal, and reentrant Start
-from the ready notification in both copy and shared-buffer arrangements.
+IO-last readiness in the copy arrangement, buffers-last readiness in the
+shared-buffer arrangement, and pool/IO withdrawal. Reentrant Start from the
+ready notification is checked in the shared, buffers-last arrangement;
+the copy, IO-last arrangement checks ordinary Start and flag transitions.
 
 The established failed-format and Position Rust regressions use a small
 local fixed-port test node instead of the unrelated retained-lease fixture.
@@ -64,11 +66,32 @@ They check restored-format/lost-pool notification, valid and undersized
 Position setup, clear, Clock rejection, enumeration termination, optional
 consumer delegation/errors, and parameter counts with and without Props.
 
+The focused `info_parameters_survive_reentrant_format_withdrawal` regression
+clears a negotiated input format through the public node method during an
+outer node-info callback and, separately, during an outer port-info callback.
+Nested notifications occur, live Format parameter flags change from
+READWRITE to WRITE, and the outer port array retains its configured values.
+The outer node flags retain their ready value while live flags change to
+NEED_CONFIGURE. Both outer parameter pointers are checked against the live
+State arrays and read again before callback return. Node parameter records
+are immutable through the clean public control API, so their ownership is
+checked by distinct storage and valid unchanged contents rather than an
+invented node-parameter mutation API.
+
+The fixture assumes synchronous listener/control calls on one main thread,
+a stopped node, no concurrent processing, and no listener or handle destruction
+during callbacks. Capture fields use `Cell`, avoiding an exclusive Rust borrow
+across recursion. Callback-scoped pointers are never used after callback return.
+This is a reentrancy regression, not a concurrent listener-mutation test.
+
 After the measurement hold ends, run the wrapper and ndarray test suites,
 build the release ndarray plugin, and run the C regression against that
 exact binary. Connected FITS source qualification remains necessary before
 calling the clean backport qualified. The previously frozen private plugin
 directory must remain unchanged while its measurements are in progress.
+The focused regression and all clean-backport runtime verification remain
+unexecuted during the capacity hold; preparing or formatting tests is not a
+pass result.
 
 ## Delivery boundary
 

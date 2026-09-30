@@ -1014,7 +1014,7 @@ unsafe extern "C" fn node_process<N: Node>(object: *mut c_void) -> i32 {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::UnsafeCell;
+    use std::cell::{Cell, UnsafeCell};
     use std::ffi::c_void;
     use std::mem::ManuallyDrop;
     use std::ptr;
@@ -1175,6 +1175,177 @@ mod tests {
         unsafe {
             sys::spa_hook_remove(&mut listener);
             ManuallyDrop::drop(&mut handle.state);
+        }
+    }
+
+    #[test]
+    fn info_parameters_survive_reentrant_format_withdrawal() {
+        struct Capture {
+            object: *mut c_void,
+            reenter_on_node: bool,
+            armed: Cell<bool>,
+            withdrawing: Cell<bool>,
+            nested_events: Cell<u32>,
+            result: Cell<i32>,
+            node_checked: Cell<bool>,
+            port_checked: Cell<bool>,
+            node_owned: Cell<bool>,
+            port_owned: Cell<bool>,
+        }
+
+        unsafe fn values(params: *const sys::spa_param_info, count: u32) -> Vec<(u32, u32)> {
+            unsafe { std::slice::from_raw_parts(params, count as usize) }
+                .iter()
+                .map(|param| (param.id, param.flags))
+                .collect()
+        }
+
+        fn withdraw(capture: &Capture) {
+            capture.armed.set(false);
+            capture.withdrawing.set(true);
+            capture.result.set(unsafe {
+                node_port_set_param::<TestNode>(
+                    capture.object,
+                    sys::SPA_DIRECTION_INPUT,
+                    0,
+                    sys::SPA_PARAM_Format,
+                    0,
+                    ptr::null(),
+                )
+            });
+            capture.withdrawing.set(false);
+        }
+
+        unsafe extern "C" fn on_info(data: *mut c_void, info: *const sys::spa_node_info) {
+            let capture = unsafe { &*data.cast::<Capture>() };
+            if capture.withdrawing.get() {
+                capture.nested_events.set(capture.nested_events.get() + 1);
+                return;
+            }
+            if !capture.reenter_on_node || !capture.armed.get() {
+                return;
+            }
+            // Copy values rather than retaining a slice across the nested call:
+            // the negative case may expose an array that the nested call mutates.
+            let before = unsafe { values((*info).params, (*info).n_params) };
+            let params = unsafe { (*info).params };
+            let flags = unsafe { (*info).flags };
+            let instance = unsafe { super::instance_ref::<TestNode>(capture.object).unwrap() };
+            {
+                let state = claim(instance).unwrap();
+                capture
+                    .node_owned
+                    .set(params != state.params.as_ptr().cast_mut());
+            }
+            withdraw(capture);
+            let after = unsafe { values((*info).params, (*info).n_params) };
+            let state = claim(instance).unwrap();
+            capture.node_checked.set(
+                before == after
+                    && before == vec![(sys::SPA_PARAM_IO, sys::SPA_PARAM_INFO_READ)]
+                    && params == unsafe { (*info).params }
+                    && flags == unsafe { (*info).flags }
+                    && flags & sys::SPA_NODE_FLAG_NEED_CONFIGURE as u64 == 0
+                    && state.node_flags() & sys::SPA_NODE_FLAG_NEED_CONFIGURE as u64 != 0,
+            );
+        }
+
+        unsafe extern "C" fn on_port_info(
+            data: *mut c_void,
+            direction: u32,
+            id: u32,
+            info: *const sys::spa_port_info,
+        ) {
+            let capture = unsafe { &*data.cast::<Capture>() };
+            if capture.withdrawing.get() {
+                capture.nested_events.set(capture.nested_events.get() + 1);
+                return;
+            }
+            if direction != sys::SPA_DIRECTION_INPUT || id != 0 {
+                return;
+            }
+            let before = unsafe { values((*info).params, (*info).n_params) };
+            let params = unsafe { (*info).params };
+            let instance = unsafe { super::instance_ref::<TestNode>(capture.object).unwrap() };
+            {
+                let state = claim(instance).unwrap();
+                capture
+                    .port_owned
+                    .set(params != state.node.ports()[0].params.as_ptr().cast_mut());
+            }
+            if !capture.reenter_on_node && capture.armed.get() {
+                withdraw(capture);
+            }
+            let after = unsafe { values((*info).params, (*info).n_params) };
+            let state = claim(instance).unwrap();
+            let live = &state.node.ports()[0];
+            capture.port_checked.set(
+                before == after
+                    && before.len() == 5
+                    && before[2] == (sys::SPA_PARAM_Format, sys::SPA_PARAM_INFO_READWRITE)
+                    && params == unsafe { (*info).params }
+                    && live.params[2].flags == sys::SPA_PARAM_INFO_WRITE
+                    && live.format.is_none(),
+            );
+        }
+
+        // One synchronous main-thread listener; node stopped, no processing or
+        // hook/handle destruction. Mutation uses the public format-clear method.
+        // Cell avoids an exclusive capture borrow spanning nested notifications.
+        for reenter_on_node in [true, false] {
+            let mut handle = test_handle(TestNode::new(None).unwrap());
+            let object = ptr::from_mut(handle.as_mut()).cast::<c_void>();
+            let mut io: sys::spa_io_buffers = unsafe { std::mem::zeroed() };
+            let format = Format::f32_image("org.calculon.test/1", 4, 3, None).unwrap();
+            {
+                let mut state = claim(handle.as_ref()).unwrap();
+                for port in state.node.ports_mut() {
+                    port.format = Some(format.clone());
+                    port.update_format_params();
+                    port.n_buffers = 1;
+                    port.io = ptr::from_mut(&mut io);
+                }
+            }
+            let capture = Capture {
+                object,
+                reenter_on_node,
+                armed: Cell::new(true),
+                withdrawing: Cell::new(false),
+                nested_events: Cell::new(0),
+                result: Cell::new(-libc::EIO),
+                node_checked: Cell::new(false),
+                port_checked: Cell::new(false),
+                node_owned: Cell::new(false),
+                port_owned: Cell::new(false),
+            };
+            let mut listener: sys::spa_hook = unsafe { std::mem::zeroed() };
+            let mut events: sys::spa_node_events = unsafe { std::mem::zeroed() };
+            events.version = sys::SPA_VERSION_NODE_EVENTS;
+            events.info = Some(on_info);
+            events.port_info = Some(on_port_info);
+            assert_eq!(
+                unsafe {
+                    node_add_listener::<TestNode>(
+                        object,
+                        &mut listener,
+                        &events,
+                        ptr::from_ref(&capture).cast_mut().cast(),
+                    )
+                },
+                0
+            );
+            assert_eq!(capture.result.get(), 0);
+            assert!(capture.nested_events.get() >= 2);
+            assert!(capture.port_checked.get());
+            assert!(capture.port_owned.get());
+            if reenter_on_node {
+                assert!(capture.node_checked.get());
+                assert!(capture.node_owned.get());
+            }
+            unsafe {
+                sys::spa_hook_remove(&mut listener);
+                ManuallyDrop::drop(&mut handle.state);
+            }
         }
     }
 
