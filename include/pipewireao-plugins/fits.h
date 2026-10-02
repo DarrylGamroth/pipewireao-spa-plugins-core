@@ -9,6 +9,8 @@
 #define SPA_KEY_API_FITS_PATH "api.fits.path"
 #define SPA_KEY_API_FITS_HDU "api.fits.hdu"
 #define SPA_KEY_API_FITS_SAMPLE_RANK "api.fits.sample-rank"
+/** Ndarray axis order: row-major or column-major; image frames default to column-major. */
+#define SPA_KEY_API_FITS_LAYOUT "api.fits.layout"
 #define SPA_KEY_API_FITS_RATE "api.fits.rate"
 #define SPA_KEY_API_FITS_SCHEMA "api.fits.schema"
 #define SPA_KEY_API_FITS_PROFILE "api.fits.profile"
