@@ -174,6 +174,7 @@ struct impl {
 	_Atomic uint32_t refs;
 	_Atomic bool destroy_scheduled;
 	_Atomic bool destroying;
+	_Atomic bool cleanup_started;
 };
 
 static void impl_free(struct impl *impl);
@@ -469,7 +470,8 @@ static void capture_process(void *data)
 	uint32_t count;
 	uint64_t blocked_input;
 
-	if (ownership_transition_pending(impl))
+	if (atomic_load_explicit(&impl->destroying, memory_order_acquire) ||
+			ownership_transition_pending(impl))
 		return;
 	drain_completions(impl);
 	if (atomic_load_explicit(&impl->fatal_error, memory_order_acquire) != 0)
@@ -806,7 +808,8 @@ static void playback_process(void *data)
 	uint32_t attempt, input_index = UINT32_MAX;
 	int result;
 
-	if (ownership_transition_pending(impl))
+	if (atomic_load_explicit(&impl->destroying, memory_order_acquire) ||
+			ownership_transition_pending(impl))
 		return;
 	reclaim_playback_buffers(impl);
 	if (atomic_load_explicit(&impl->fatal_error, memory_order_acquire) != 0)
@@ -1491,8 +1494,47 @@ static void playback_state_changed(void *data, enum pw_stream_state old,
 				error == NULL ? "unknown error" : error);
 }
 
+/* Stream destruction can precede module destruction during Core teardown.
+ * Keep buffer listeners installed until disconnection has revoked both pools;
+ * playback descriptors must be retired before their capture storage. */
+static void quiesce_streams(struct impl *impl)
+{
+	if (atomic_exchange_explicit(&impl->destroying, true,
+			memory_order_acq_rel))
+		return;
+	if (impl->capture != NULL)
+		(void)pw_stream_set_active(impl->capture, false);
+	if (impl->playback != NULL)
+		(void)pw_stream_set_active(impl->playback, false);
+	if (impl->playback != NULL)
+		(void)pw_stream_disconnect(impl->playback);
+	if (impl->capture != NULL)
+		(void)pw_stream_disconnect(impl->capture);
+}
+
+static void playback_destroy(void *data)
+{
+	struct impl *impl = data;
+
+	schedule_destroy(impl);
+	quiesce_streams(impl);
+	spa_hook_remove(&impl->playback_listener);
+	impl->playback = NULL;
+}
+
+static void capture_destroy(void *data)
+{
+	struct impl *impl = data;
+
+	schedule_destroy(impl);
+	quiesce_streams(impl);
+	spa_hook_remove(&impl->capture_listener);
+	impl->capture = NULL;
+}
+
 static const struct pw_stream_events playback_events = {
 	PW_VERSION_STREAM_EVENTS,
+	.destroy = playback_destroy,
 	.state_changed = playback_state_changed,
 	.process = playback_process,
 	.add_buffer = playback_add_buffer,
@@ -1639,6 +1681,9 @@ static void capture_param_changed(void *data, uint32_t id,
 
 	if (id != SPA_PARAM_Format)
 		return;
+	if (param != NULL && atomic_load_explicit(&impl->destroying,
+			memory_order_acquire))
+		return;
 	if (param == NULL) {
 		invalidate_playback_generation(impl, true);
 		if (!impl->capture_pool_withdrawing)
@@ -1675,6 +1720,8 @@ static void stream_state_changed(void *data, enum pw_stream_state old,
 {
 	struct impl *impl = data;
 
+	if (atomic_load_explicit(&impl->destroying, memory_order_acquire))
+		return;
 	if (state == PW_STREAM_STATE_UNCONNECTED) {
 		schedule_destroy(impl);
 		return;
@@ -1700,6 +1747,7 @@ static void stream_state_changed(void *data, enum pw_stream_state old,
 
 static const struct pw_stream_events capture_events = {
 	PW_VERSION_STREAM_EVENTS,
+	.destroy = capture_destroy,
 	.state_changed = stream_state_changed,
 	.param_changed = capture_param_changed,
 	.add_buffer = capture_add_buffer,
@@ -1753,6 +1801,9 @@ static void update_stats(void *data, uint64_t expirations)
 	uint32_t count = 0;
 
 	(void)expirations;
+	/* A Core-owned stream can disappear before deferred module cleanup. */
+	if (atomic_load_explicit(&impl->destroying, memory_order_acquire))
+		return;
 
 #define ADD_COUNTER(key, field) do { \
 	(void)snprintf(values[count], sizeof(values[count]), "%" PRIu64, \
@@ -1948,7 +1999,7 @@ static void impl_destroy(struct impl *impl)
 {
 	bool expected = false;
 
-	if (!atomic_compare_exchange_strong_explicit(&impl->destroying,
+	if (!atomic_compare_exchange_strong_explicit(&impl->cleanup_started,
 			&expected, true, memory_order_acq_rel, memory_order_relaxed))
 		return;
 	atomic_store_explicit(&impl->destroy_scheduled, true,
@@ -1958,12 +2009,8 @@ static void impl_destroy(struct impl *impl)
 				impl->stats_timer);
 		impl->stats_timer = NULL;
 	}
-	if (impl->capture != NULL)
-		(void)pw_stream_set_active(impl->capture, false);
-	if (impl->playback != NULL)
-		(void)pw_stream_set_active(impl->playback, false);
+	quiesce_streams(impl);
 	if (impl->playback != NULL) {
-		(void)pw_stream_flush(impl->playback, false);
 		pw_stream_destroy(impl->playback);
 		impl->playback = NULL;
 	}
@@ -2149,6 +2196,7 @@ int pipewire__module_init(struct pw_impl_module *module, const char *args)
 	atomic_init(&impl->fatal_error, FAILURE_NONE);
 	atomic_init(&impl->destroy_scheduled, false);
 	atomic_init(&impl->destroying, false);
+	atomic_init(&impl->cleanup_started, false);
 	atomic_init(&impl->input_stats.publications, 0);
 	atomic_init(&impl->input_stats.replacements, 0);
 	atomic_init(&impl->input_stats.dropped_arrivals, 0);

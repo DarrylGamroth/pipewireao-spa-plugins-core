@@ -202,7 +202,16 @@ int main(int argc, char **argv)
 			"queue.storage=lease "
 			"remote.name=internal", NULL);
 	CHECK(module != NULL);
-	pw_impl_module_destroy(module);
+	/* Context teardown destroys its Core and Streams before its modules. */
+	pw_context_destroy(context);
+	context = pw_context_new(pw_main_loop_get_loop(loop), NULL, 0);
+	CHECK(context != NULL);
+	module = pw_context_load_module(context, "libpipewire-module-queue",
+			"queue.max-buffers=1 "
+			"queue.overflow=drop-oldest "
+			"queue.storage=copy "
+			"remote.name=internal", NULL);
+	CHECK(module != NULL);
 	pw_context_destroy(context);
 	pw_main_loop_destroy(loop);
 	pw_deinit();

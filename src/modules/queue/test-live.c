@@ -514,6 +514,8 @@ static struct pw_stream *create_endpoint_stream(struct fixture *fixture,
 	CHECK(format != NULL);
 	stream = pw_stream_new(fixture->core, name,
 			pw_properties_new(PW_KEY_NODE_NAME, name,
+					PW_KEY_NODE_LOOP_NAME, direction == PW_DIRECTION_OUTPUT ?
+							"queue.capture" : "queue.playback",
 					PW_KEY_NODE_VIRTUAL, "true",
 					PW_KEY_NODE_PAUSE_ON_IDLE, "false", NULL));
 	CHECK(stream != NULL);
@@ -727,6 +729,8 @@ static void fixture_init_format(struct fixture *fixture, const char *overflow,
 	CHECK(fixture->main_loop != NULL);
 	fixture->context = pw_context_new(pw_main_loop_get_loop(fixture->main_loop),
 			pw_properties_new(PW_KEY_CONFIG_NAME, "pipewire.conf",
+					"context.data-loops", "[ { loop.name=queue.capture thread.name=queue.capture } "
+							"{ loop.name=queue.playback thread.name=queue.playback } ]",
 					"module.rt", "false",
 					"module.profiler", "false",
 					"factory.dummy-driver", "false",
@@ -738,8 +742,8 @@ static void fixture_init_format(struct fixture *fixture, const char *overflow,
 			"queue.max-buffers=1 queue.overflow=%s queue.storage=%s "
 			"queue.media=%s "
 			"remote.name=internal "
-			"capture.props={ node.name=test.queue-input } "
-			"playback.props={ node.name=test.queue-output }",
+			"capture.props={ node.name=test.queue-input node.loop.name=queue.capture } "
+			"playback.props={ node.name=test.queue-output node.loop.name=queue.playback }",
 			overflow, storage,
 			video_format ? "video/raw" : "application/ndarray");
 	CHECK(length > 0 && (size_t)length < sizeof(args));
@@ -802,6 +806,13 @@ static void fixture_init_format(struct fixture *fixture, const char *overflow,
 	wait_for_link(fixture, fixture->playback_link);
 	wait_for_streaming(fixture, &fixture->producer.endpoint);
 	wait_for_streaming(fixture, &fixture->observer.endpoint);
+	CHECK(pw_stream_get_data_loop(fixture->producer.endpoint.stream) != NULL);
+	CHECK(pw_stream_get_data_loop(fixture->observer.endpoint.stream) != NULL);
+	fprintf(stderr, "queue test data-loops producer=%s observer=%s\n",
+			pw_stream_get_data_loop(fixture->producer.endpoint.stream)->name,
+			pw_stream_get_data_loop(fixture->observer.endpoint.stream)->name);
+	CHECK(pw_stream_get_data_loop(fixture->producer.endpoint.stream) !=
+			pw_stream_get_data_loop(fixture->observer.endpoint.stream));
 }
 
 static void fixture_init(struct fixture *fixture, const char *overflow,
@@ -918,7 +929,7 @@ static void test_backpressure(const char *storage)
 }
 
 static void test_module_destruction(const char *storage,
-		const char *occupancy)
+		const char *occupancy, bool context_first)
 {
 	struct fixture fixture;
 	bool held = false;
@@ -942,6 +953,20 @@ static void test_module_destruction(const char *storage,
 		CHECK(strcmp(occupancy, "empty") == 0);
 	}
 	CHECK(module_counter(&fixture, "queue.stats.protocol-errors") == 0);
+	if (context_first) {
+		/* Core-owned stream destruction occurs before module destruction.
+		 * In-flight observer loans must be revoked, never returned afterward. */
+		pw_loop_leave(pw_main_loop_get_loop(fixture.main_loop));
+		pw_context_destroy(fixture.context);
+		CHECK(fixture.observer.held == NULL);
+		CHECK(atomic_load_explicit(&fixture.producer.endpoint.errors,
+				memory_order_relaxed) == 0);
+		CHECK(atomic_load_explicit(&fixture.observer.endpoint.errors,
+				memory_order_relaxed) == 0);
+		pw_main_loop_destroy(fixture.main_loop);
+		free(fixture.producer.identity);
+		return;
+	}
 	pw_impl_module_destroy(fixture.module);
 	fixture.module = NULL;
 	/* Destroying the module also destroys both internal stream ports and their
@@ -1377,13 +1402,21 @@ int main(int argc, char **argv)
 		fprintf(stderr, "queue lifecycle storage=%s case=observer-first\n", name);
 		test_observer_first(name);
 		fprintf(stderr, "queue lifecycle storage=%s case=destruction-empty\n", name);
-		test_module_destruction(name, "empty");
+		test_module_destruction(name, "empty", false);
 		fprintf(stderr, "queue lifecycle storage=%s case=destruction-queued\n", name);
-		test_module_destruction(name, "queued");
+		test_module_destruction(name, "queued", false);
 		fprintf(stderr, "queue lifecycle storage=%s case=destruction-in-flight\n", name);
-		test_module_destruction(name, "in-flight");
+		test_module_destruction(name, "in-flight", false);
 		fprintf(stderr, "queue lifecycle storage=%s case=destruction-backpressure\n", name);
-		test_module_destruction(name, "backpressure");
+		test_module_destruction(name, "backpressure", false);
+		for (uint32_t case_id = 0; case_id < 4; case_id++) {
+			const char *occupancy[] = { "empty", "queued", "in-flight",
+					"backpressure" };
+
+			fprintf(stderr, "queue lifecycle storage=%s case=context-%s\n",
+					name, occupancy[case_id]);
+			test_module_destruction(name, occupancy[case_id], true);
+		}
 		fprintf(stderr, "queue lifecycle storage=%s case=observer-reconnect\n", name);
 		test_observer_reconnect(name);
 		fprintf(stderr, "queue lifecycle storage=%s case=format-recreation\n", name);

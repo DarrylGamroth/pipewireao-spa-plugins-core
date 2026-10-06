@@ -20,6 +20,15 @@ queue_module = shared_library(
 )
 
 if get_option('tests').allowed()
+  queue_lifetime_test = executable(
+    'pipewireao-queue-lifetime-test',
+    'test-lifetime.c',
+    link_with: queue_state,
+    dependencies: [spa_dep, pipewire_dep, threads_dep],
+    c_args: ['-DPACKAGE_VERSION="@0@"'.format(meson.project_version())],
+  )
+  test('pipewireao-queue-lifetime', queue_lifetime_test)
+
   queue_state_test = executable(
     'pipewireao-queue-state-test',
     'test-queue.c',
