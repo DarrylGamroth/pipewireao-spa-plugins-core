@@ -57,7 +57,10 @@ if get_option('tests').allowed()
   )
   queue_module_test_env.set(
     'PIPEWIREAO_CONFIG_DIR',
-    pipewire_pkg_dep.get_variable(pkgconfig: 'confdatadir'),
+    pipewire_pkg_dep.get_variable(
+      pkgconfig: 'confdatadir',
+      default_value: pipewire_pkg_dep.get_variable(pkgconfig: 'prefix') / 'share' / 'pipewire-ao',
+    ),
   )
   queue_module_test_env.set(
     'PIPEWIREAO_MODULE_DIR',
@@ -86,11 +89,40 @@ if get_option('tests').allowed()
   )
 
   pipewire_daemon = find_program(
-    pipewire_pkg_dep.get_variable(pkgconfig: 'confdatadir') / 'pipewire-ao',
+    pipewire_pkg_dep.get_variable(pkgconfig: 'prefix') / 'bin' / 'pipewire-ao',
     required: false,
   )
   shell = find_program('sh')
+  queue_module_test_env.prepend(
+    'LD_LIBRARY_PATH', pipewire_pkg_dep.get_variable(pkgconfig: 'libdir'),
+  )
   if pipewire_daemon.found()
+    queue_remote_acquisition_test = executable(
+      'pipewireao-queue-remote-acquisition-test',
+      'test-remote-acquisition.c',
+      dependencies: [spa_dep, pipewire_dep],
+    )
+    foreach name, options : {
+      'pipewireao-queue-remote-acquisition': [],
+      'pipewireao-queue-remote-acquisition-header': ['--header-only'],
+      'pipewireao-queue-remote-acquisition-pause': ['--pause'],
+      'pipewireao-queue-remote-acquisition-shared-loop': ['--same-loop'],
+    }
+      test(
+        name,
+        shell,
+        args: [
+          files('test-remote-acquisition.sh'),
+          queue_remote_acquisition_test.full_path(),
+          pipewire_daemon.full_path(),
+          meson.current_source_dir() / 'test-remote-acquisition.conf',
+          meson.current_build_dir(),
+        ] + options,
+        depends: [queue_module, queue_remote_acquisition_test],
+        env: queue_module_test_env,
+        timeout: 25,
+      )
+    endforeach
     queue_remote_test = executable(
       'pipewireao-queue-remote-test',
       'test-remote-registry.c',

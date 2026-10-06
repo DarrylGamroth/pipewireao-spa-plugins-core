@@ -101,6 +101,7 @@ struct output_slot {
 	uint32_t index;
 	struct pw_buffer *playback;
 	bool output_available;
+	bool output_dequeued;
 	bool output_in_flight;
 	uint64_t generation;
 	uint64_t delivered_input;
@@ -759,6 +760,7 @@ static void reclaim_playback_buffers(struct impl *impl)
 					UINT32_MAX, UINT32_MAX, -EINVAL);
 			return;
 		}
+		slot->output_dequeued = true;
 		if (slot->output_in_flight) {
 			if (impl->storage == STORAGE_LEASE &&
 					slot->delivered_input != SLOT_TOKEN_NONE) {
@@ -800,6 +802,32 @@ static void reclaim_playback_buffers(struct impl *impl)
 	}
 }
 
+/* Native output streams call process only while their free-buffer ring is
+ * nonempty. Keep unused output loans in that ring between callbacks. Drain
+ * first, then return: return_buffer() inserts at the front, so returning inside
+ * reclaim_playback_buffers() would repeatedly dequeue the same buffer. */
+static void return_unused_playback_buffers(struct impl *impl)
+{
+	uint32_t i;
+
+	for (i = 0; i < impl->n_playback_buffers; i++) {
+		struct output_slot *slot = &impl->outputs[i];
+		int result;
+
+		if (!slot->output_dequeued || slot->output_in_flight)
+			continue;
+		result = pw_stream_return_buffer(impl->playback, slot->playback);
+		if (result < 0) {
+			/* A failed return leaves the native loan owned by this callback. */
+			MARK_PROTOCOL_ERROR(impl, "playback.return-unused", slot->index,
+					UINT32_MAX, UINT32_MAX, result);
+			continue;
+		}
+		slot->output_dequeued = false;
+		slot->output_available = false;
+	}
+}
+
 static void playback_process(void *data)
 {
 	struct impl *impl = data;
@@ -813,21 +841,21 @@ static void playback_process(void *data)
 		return;
 	reclaim_playback_buffers(impl);
 	if (atomic_load_explicit(&impl->fatal_error, memory_order_acquire) != 0)
-		return;
+		goto done;
 	if (!atomic_load_explicit(&impl->playback_configured,
 			memory_order_acquire))
-		return;
+		goto done;
 
 	if (atomic_load_explicit(&impl->active_outputs,
 			memory_order_relaxed) != 0)
-		return;
+		goto done;
 	if (impl->storage == STORAGE_COPY) {
 		output_slot = find_copy_output(impl);
 		if (output_slot == NULL) {
 			atomic_fetch_add_explicit(
 					&impl->output_stats.pool_exhaustions, 1,
 					memory_order_relaxed);
-			return;
+			goto done;
 		}
 	} else {
 		output_slot = NULL;
@@ -840,18 +868,18 @@ static void playback_process(void *data)
 		for (attempt = 0; attempt < MAX_POOL_BUFFERS; attempt++) {
 			result = pwao_queue_ring_try_peek(&impl->pending, &input_token);
 			if (result == 0)
-				return;
+				goto done;
 			if (result < 0) {
 				MARK_PROTOCOL_ERROR(impl, "playback.peek-pending", UINT32_MAX,
 						UINT32_MAX, UINT32_MAX, result);
-				return;
+				goto done;
 			}
 			input_index = slot_token_index(input_token);
 			if (input_token == SLOT_TOKEN_NONE ||
 					input_index >= impl->n_capture_buffers) {
 				MARK_PROTOCOL_ERROR(impl, "playback.pending-invalid-slot",
 						input_index, UINT32_MAX, UINT32_MAX, -EINVAL);
-				return;
+				goto done;
 			}
 			output_slot = &impl->outputs[input_index];
 			if (!output_slot->output_available ||
@@ -861,36 +889,36 @@ static void playback_process(void *data)
 				atomic_fetch_add_explicit(
 						&impl->output_stats.pool_exhaustions, 1,
 						memory_order_relaxed);
-				return;
+				goto done;
 			}
 			result = pwao_queue_ring_try_claim(&impl->pending, input_token);
 			if (result == 1)
 				break;
 			if (result == 0)
-				return;
+				goto done;
 			if (result != -EAGAIN) {
 				MARK_PROTOCOL_ERROR(impl, "playback.claim-pending",
 						input_index, UINT32_MAX, UINT32_MAX, result);
-				return;
+				goto done;
 			}
 		}
 		if (attempt == MAX_POOL_BUFFERS)
-			return;
+			goto done;
 	} else {
 		result = pwao_queue_ring_try_pop(&impl->pending, &input_token);
 		if (result == 0)
-			return;
+			goto done;
 		if (result < 0) {
 			MARK_PROTOCOL_ERROR(impl, "playback.pop-pending", UINT32_MAX,
 					UINT32_MAX, UINT32_MAX, result);
-			return;
+			goto done;
 		}
 		input_index = slot_token_index(input_token);
 		if (input_token == SLOT_TOKEN_NONE ||
 				input_index >= impl->n_capture_buffers) {
 			MARK_PROTOCOL_ERROR(impl, "playback.pending-invalid-slot",
 					input_index, UINT32_MAX, UINT32_MAX, -EINVAL);
-			return;
+			goto done;
 		}
 	}
 	request_backpressure_recovery(impl);
@@ -903,13 +931,13 @@ static void playback_process(void *data)
 				memory_order_acq_rel, memory_order_relaxed)) {
 		MARK_TOKEN_PROTOCOL_ERROR(impl, "playback.acquire-pending", input_index,
 				SLOT_PENDING, state, input_token, observed_token, -EPROTO);
-		return;
+		goto done;
 	}
 	result = transfer_buffer(impl, input_index, output_slot);
 	if (result < 0) {
 		MARK_PROTOCOL_ERROR(impl, "playback.transfer", input_index,
 				SLOT_ACTIVE, SLOT_ACTIVE, result);
-		return;
+		goto done;
 	}
 	if (impl->storage == STORAGE_COPY) {
 		result = publish_completion(impl, input_token);
@@ -918,7 +946,7 @@ static void playback_process(void *data)
 					memory_order_acquire);
 			MARK_PROTOCOL_ERROR(impl, "playback.complete-copy", input_index,
 					SLOT_ACTIVE, state, result);
-			return;
+			goto done;
 		}
 	}
 	output_slot->output_available = false;
@@ -933,6 +961,10 @@ static void playback_process(void *data)
 	if (result < 0)
 		MARK_PROTOCOL_ERROR(impl, "playback.publish", output_slot->index,
 				UINT32_MAX, UINT32_MAX, result);
+	else
+		output_slot->output_dequeued = false;
+done:
+	return_unused_playback_buffers(impl);
 }
 
 static void reset_input_ownership_quiescent(struct impl *impl,
@@ -1160,8 +1192,10 @@ static int ownership_playback_stage(struct spa_loop *loop, bool async,
 		impl_unref(impl);
 		return 0;
 	}
-	if (impl->playback != NULL)
+	if (impl->playback != NULL) {
 		reclaim_playback_buffers(impl);
+		return_unused_playback_buffers(impl);
+	}
 	result = impl->capture == NULL ? -EIO : invoke_owned(impl,
 			pw_stream_get_data_loop(impl->capture), ownership_capture_stage);
 	if (result < 0)
@@ -1379,6 +1413,7 @@ static void playback_add_buffer(void *data, struct pw_buffer *buffer)
 	slot = &impl->outputs[index];
 	slot->playback = buffer;
 	slot->output_available = false;
+	slot->output_dequeued = false;
 	slot->output_in_flight = false;
 	slot->generation = 0;
 	slot->delivered_input = SLOT_TOKEN_NONE;
@@ -1444,6 +1479,7 @@ static void playback_remove_buffer(void *data, struct pw_buffer *buffer)
 			SPA_N_ELEMENTS(slot->owned_fds));
 	slot->playback = NULL;
 	slot->output_available = false;
+	slot->output_dequeued = false;
 	slot->output_in_flight = false;
 	slot->generation = 0;
 	slot->delivered_input = SLOT_TOKEN_NONE;
