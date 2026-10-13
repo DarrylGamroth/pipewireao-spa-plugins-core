@@ -1517,20 +1517,18 @@ static int update_capture_params(struct impl *impl)
 			SPA_PARAM_META_type, SPA_POD_Id(SPA_META_Header),
 			SPA_PARAM_META_size,
 			SPA_POD_Int((int32_t)sizeof(struct spa_meta_header)));
-	if (impl->media_subtype == SPA_MEDIA_SUBTYPE_ndarray) {
-		/* Every fan-out peer must advertise Acquisition, otherwise buffer
-		 * negotiation can strip it from the producer's shared pool. */
-		spa_pod_builder_push_object(&builder, &acquisition,
-				SPA_TYPE_OBJECT_ParamMeta, SPA_PARAM_Meta);
-		spa_pod_builder_add(&builder,
-				SPA_PARAM_META_type, SPA_POD_Id(SPA_META_Acquisition),
-				SPA_PARAM_META_size,
-				SPA_POD_Int((int32_t)sizeof(struct spa_meta_acquisition)), 0);
-		spa_pod_builder_prop(&builder, SPA_PARAM_META_features,
-				SPA_POD_PROP_FLAG_MANDATORY);
-		spa_pod_builder_int(&builder, SPA_META_FEATURE_ACQUISITION_CURRENT);
-		params[n_params++] = spa_pod_builder_pop(&builder, &acquisition);
-	}
+	/* Every fan-out peer must advertise Acquisition, otherwise buffer
+	 * negotiation can strip it from the producer's shared pool. */
+	spa_pod_builder_push_object(&builder, &acquisition,
+			SPA_TYPE_OBJECT_ParamMeta, SPA_PARAM_Meta);
+	spa_pod_builder_add(&builder,
+			SPA_PARAM_META_type, SPA_POD_Id(SPA_META_Acquisition),
+			SPA_PARAM_META_size,
+			SPA_POD_Int((int32_t)sizeof(struct spa_meta_acquisition)), 0);
+	spa_pod_builder_prop(&builder, SPA_PARAM_META_features,
+			SPA_POD_PROP_FLAG_MANDATORY);
+	spa_pod_builder_int(&builder, SPA_META_FEATURE_ACQUISITION_CURRENT);
+	params[n_params++] = spa_pod_builder_pop(&builder, &acquisition);
 	return pw_stream_update_params(impl->capture, params, n_params);
 }
 

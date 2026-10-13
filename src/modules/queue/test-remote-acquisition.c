@@ -19,6 +19,7 @@
 #include <spa/param/buffers.h>
 #include <spa/node/command.h>
 #include <spa/param/format.h>
+#include <spa/param/video/raw.h>
 #include <spa/pod/builder.h>
 #include <spa/utils/result.h>
 
@@ -86,6 +87,8 @@ struct test_data {
 	struct port_identity ports[64];
 	uint32_t n_ports;
 	bool header_only;
+	bool video;
+	bool queue_only;
 	bool pause_source;
 	int done_seq;
 	bool discovered;
@@ -464,12 +467,22 @@ static const struct pw_stream_events observer_events = {
 	.trigger_done = endpoint_trigger_done,
 };
 
-static struct spa_pod *build_format(uint8_t *storage, size_t size)
+static struct spa_pod *build_format(uint8_t *storage, size_t size, bool video)
 {
 	struct spa_pod_builder builder = SPA_POD_BUILDER_INIT(storage,
 			(uint32_t)size);
 	const int32_t shape[] = { 8, 8 };
 	const struct spa_fraction rate = SPA_FRACTION(500, 1);
+	const struct spa_rectangle image_size = SPA_RECTANGLE(8, 8);
+
+	if (video)
+		return spa_pod_builder_add_object(&builder,
+				SPA_TYPE_OBJECT_Format, SPA_PARAM_EnumFormat,
+				SPA_FORMAT_mediaType, SPA_POD_Id(SPA_MEDIA_TYPE_video),
+				SPA_FORMAT_mediaSubtype, SPA_POD_Id(SPA_MEDIA_SUBTYPE_raw),
+				SPA_FORMAT_VIDEO_format, SPA_POD_Id(SPA_VIDEO_FORMAT_GRAY16_LE),
+				SPA_FORMAT_VIDEO_size, SPA_POD_Rectangle(&image_size),
+				SPA_FORMAT_VIDEO_framerate, SPA_POD_Fraction(&rate));
 
 	return spa_pod_builder_add_object(&builder,
 			SPA_TYPE_OBJECT_Format, SPA_PARAM_EnumFormat,
@@ -502,7 +515,7 @@ static void endpoint_param_changed(void *user_data, uint32_t id,
 	const struct spa_pod *params[4];
 	if (id != SPA_PARAM_Format || param == NULL)
 		return;
-	params[0] = build_format(format_storage, sizeof(format_storage));
+	params[0] = build_format(format_storage, sizeof(format_storage), endpoint->test->video);
 	params[1] = spa_pod_builder_add_object(&buffers_builder,
 			SPA_TYPE_OBJECT_ParamBuffers, SPA_PARAM_Buffers,
 			SPA_PARAM_BUFFERS_buffers, SPA_POD_Int(3),
@@ -554,7 +567,7 @@ static void create_endpoint(struct test_data *data, struct endpoint *endpoint,
 	CHECK(endpoint->stream != NULL);
 	pw_stream_add_listener(endpoint->stream, &endpoint->listener,
 			events, endpoint);
-	params[0] = build_format(format_storage, sizeof(format_storage));
+	params[0] = build_format(format_storage, sizeof(format_storage), data->video);
 	CHECK(pw_stream_connect(endpoint->stream, direction, PW_ID_ANY,
 			(strcmp(name, "test.remote-queue-required") == 0 ? 0 : PW_STREAM_FLAG_DRIVER) |
 			PW_STREAM_FLAG_MAP_BUFFERS |
@@ -694,15 +707,20 @@ int main(int argc, char **argv)
 	uint64_t start, deadline, next_publication, next_diagnostic;
 	bool passed, paused = false;
 
-	CHECK(argc >= 2 && argc <= 4);
+	CHECK(argc >= 2 && argc <= 6);
 	for (int i = 2; i < argc; i++) {
 		if (strcmp(argv[i], "--header-only") == 0)
 			data.header_only = true;
 		else if (strcmp(argv[i], "--pause") == 0)
 			data.pause_source = true;
+		else if (strcmp(argv[i], "--video") == 0)
+			data.video = true;
+		else if (strcmp(argv[i], "--queue-only") == 0)
+			data.queue_only = true;
 		else
 			CHECK(false);
 	}
+	CHECK(!data.queue_only || !data.pause_source);
 	pw_init(&argc, &argv);
 	data.main_loop = pw_main_loop_new(NULL);
 	CHECK(data.main_loop != NULL);
@@ -732,12 +750,14 @@ int main(int argc, char **argv)
 	producer_id = wait_for_node_id(&data, &data.producer);
 	observer_id = wait_for_node_id(&data, &data.observer);
 	required_id = wait_for_node_id(&data, &data.required);
-	/* The required consumer establishes the source's Acquisition pool before
-	 * optional fan-out, matching RTC admission order. */
-	data.required_link = create_link(&data, producer_id, required_id);
-	sync_core(&data);
-	wait_for_state(&data, &data.required, PW_STREAM_STATE_STREAMING);
-	wait_for_state(&data, &data.producer, PW_STREAM_STATE_STREAMING);
+	if (!data.queue_only) {
+		/* The required consumer establishes the source's Acquisition pool before
+		 * optional fan-out, matching RTC admission order. */
+		data.required_link = create_link(&data, producer_id, required_id);
+		sync_core(&data);
+		wait_for_state(&data, &data.required, PW_STREAM_STATE_STREAMING);
+		wait_for_state(&data, &data.producer, PW_STREAM_STATE_STREAMING);
+	}
 	data.capture_link = create_link(&data, producer_id, data.input.id);
 	data.playback_link = create_link(&data, data.output.id, observer_id);
 	sync_core(&data);
@@ -804,12 +824,13 @@ int main(int argc, char **argv)
 	passed = (!data.pause_source || paused) &&
 		atomic_load(&data.producer.publications) == SAMPLE_COUNT &&
 		atomic_load(&data.observer.deliveries) == SAMPLE_COUNT &&
-		atomic_load(&data.required.deliveries) == SAMPLE_COUNT &&
+		(data.queue_only || atomic_load(&data.required.deliveries) == SAMPLE_COUNT) &&
 		atomic_load(&data.required.errors) == 0 &&
 		atomic_load(&data.producer.errors) == 0 && atomic_load(&data.observer.errors) == 0;
 	pw_proxy_destroy(data.capture_link);
 	pw_proxy_destroy(data.playback_link);
-	pw_proxy_destroy(data.required_link);
+	if (data.required_link != NULL)
+		pw_proxy_destroy(data.required_link);
 	pw_stream_destroy(data.required.stream);
 	pw_stream_destroy(data.observer.stream);
 	pw_stream_destroy(data.producer.stream);

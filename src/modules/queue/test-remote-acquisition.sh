@@ -15,6 +15,19 @@ if [ "${1:-}" = "--same-loop" ]; then
         "$config" >"$runtime_dir/shared-loop.conf"
     config=$runtime_dir/shared-loop.conf
 fi
+if [ "${1:-}" = "--lease" ]; then
+    shift
+    sed 's/queue.storage = copy/queue.storage = lease/' \
+        "$config" >"$runtime_dir/lease.conf"
+    config=$runtime_dir/lease.conf
+fi
+for option in "$@"; do
+    if [ "$option" = "--video" ]; then
+        sed 's/queue.media = application\/ndarray/queue.media = video\/raw/' \
+            "$config" >"$runtime_dir/video.conf"
+        config=$runtime_dir/video.conf
+    fi
+done
 
 cleanup() {
     result=$?
@@ -35,6 +48,7 @@ cleanup() {
 trap cleanup EXIT HUP INT TERM
 
 export PIPEWIRE_RUNTIME_DIR=$runtime_dir
+export PIPEWIREAO_RUNTIME_DIR=$runtime_dir
 export XDG_RUNTIME_DIR=$runtime_dir
 export PIPEWIREAO_MODULE_DIR=$queue_module_dir${PIPEWIREAO_MODULE_DIR:+:$PIPEWIREAO_MODULE_DIR}
 

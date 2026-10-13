@@ -107,6 +107,10 @@ if get_option('tests').allowed()
       'pipewireao-queue-remote-acquisition-header': ['--header-only'],
       'pipewireao-queue-remote-acquisition-pause': ['--pause'],
       'pipewireao-queue-remote-acquisition-shared-loop': ['--same-loop'],
+      'pipewireao-queue-remote-video-acquisition': ['--video', '--queue-only'],
+      'pipewireao-queue-remote-video-header': ['--video', '--queue-only', '--header-only'],
+      'pipewireao-queue-remote-video-lease-acquisition': ['--lease', '--video', '--queue-only'],
+      'pipewireao-queue-remote-video-lease-header': ['--lease', '--video', '--queue-only', '--header-only'],
     }
       test(
         name,
