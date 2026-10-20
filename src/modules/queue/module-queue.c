@@ -26,6 +26,7 @@
 
 #include <pipewire/impl.h>
 #include <pipewire/log.h>
+#include <pipewire/utils.h>
 
 #define MAX_QUEUE_BUFFERS 62u
 #define MAX_POOL_BUFFERS (MAX_QUEUE_BUFFERS + 2u)
@@ -2130,11 +2131,19 @@ static int parse_options(struct impl *impl, const struct pw_properties *props)
 	return 0;
 }
 
+static bool has_text(const char *value)
+{
+	return value != NULL && value[strspn(value, " \t\n\r\v\f")] != '\0';
+}
+
 static int setup_properties(struct impl *impl, struct pw_properties *props,
 		uint32_t id)
 {
 	struct spa_error_location location;
-	const char *value, *name;
+	const char *value, *name, *description;
+	struct pw_properties *endpoints[2];
+	uint32_t group_random[4];
+	char group_id[33];
 	uint32_t pid = (uint32_t)getpid();
 	int result;
 
@@ -2163,6 +2172,31 @@ static int setup_properties(struct impl *impl, struct pw_properties *props,
 			"%u-%u", pid, id);
 	pw_properties_setf(impl->playback_props, PWAO_QUEUE_ID_PROPERTY,
 			"%u-%u", pid, id);
+	description = pw_properties_get(props, PW_KEY_NODE_DESCRIPTION);
+	if (!has_text(description))
+		description = pw_properties_get(props, PW_KEY_NODE_NAME);
+	if (!has_text(description))
+		description = "Queue";
+	pw_random(group_random, sizeof(group_random));
+	snprintf(group_id, sizeof(group_id), "%08x%08x%08x%08x",
+			group_random[0], group_random[1], group_random[2], group_random[3]);
+	endpoints[0] = impl->capture_props;
+	endpoints[1] = impl->playback_props;
+	for (uint32_t i = 0; i < SPA_N_ELEMENTS(endpoints); i++) {
+		struct pw_properties *endpoint = endpoints[i];
+
+		/* Presentation grouping is independent of execution/link grouping. */
+		pw_properties_set(endpoint, "pipewireao.graph.group.id", group_id);
+		pw_properties_set(endpoint, "pipewireao.graph.group.name", description);
+		pw_properties_set(endpoint, "pipewireao.graph.group.class", "Queue");
+		if (pw_properties_get(endpoint, PW_KEY_NODE_DESCRIPTION) == NULL)
+			pw_properties_set(endpoint, PW_KEY_NODE_DESCRIPTION,
+					pw_properties_get(endpoint, PW_KEY_NODE_NAME));
+		if (impl->storage == STORAGE_COPY &&
+				impl->overflow == PWAO_QUEUE_OVERFLOW_DROP_OLDEST &&
+				pw_properties_get(endpoint, PW_KEY_MEDIA_ROLE) == NULL)
+			pw_properties_set(endpoint, PW_KEY_MEDIA_ROLE, "Analysis");
+	}
 	if (pw_properties_get(impl->capture_props, PW_KEY_NODE_GROUP) == NULL)
 		pw_properties_setf(impl->capture_props, PW_KEY_NODE_GROUP,
 				"queue.capture-%u-%u", pid, id);

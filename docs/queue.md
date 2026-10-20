@@ -53,6 +53,8 @@ directional values are not used here.
 | `queue.overflow` | `backpressure`, `drop-oldest`, or `drop-newest`. |
 | `queue.storage` | `copy` or `lease`. |
 | `queue.media` | Optional `application/ndarray` (default) or `video/raw`. |
+| `node.name` | Optional base name for generated endpoint names and group-title fallback. |
+| `node.description` | Optional exact presentation title for the queue group. |
 | `capture.props` | Optional PipeWire properties for the input stream. |
 | `playback.props` | Optional PipeWire properties for the output stream. |
 
@@ -88,6 +90,8 @@ context.modules = [
     {
         name = libpipewire-module-queue
         args = {
+            node.name = telemetry-queue
+            node.description = "Telemetry Queue"
             queue.max-buffers = 1
             queue.overflow = drop-oldest
             queue.storage = copy
@@ -117,6 +121,49 @@ endpoint nodes. Graph clients MUST use that identity when they need to relate
 the output endpoint to its input endpoint; client identity, media name, node
 group, and link group are not unique queue identities. The value is owned by
 the module instance and is not a configuration property.
+
+## Graph presentation metadata
+
+Both endpoint nodes MUST publish the following module-owned presentation fields:
+
+| Property | Published value |
+| --- | --- |
+| `pipewireao.graph.group.id` | An opaque randomly generated 128-bit instance identity, shared by both endpoints. |
+| `pipewireao.graph.group.name` | The first nonblank top-level `node.description`, then `node.name`, otherwise `Queue`. |
+| `pipewireao.graph.group.class` | `Queue`. |
+
+An absent, empty, or whitespace-only top-level title is blank. The group title
+MUST preserve the selected nonblank string exactly, including leading and
+trailing spaces. In particular, the module MUST NOT derive the title from an endpoint name or remove numeric
+suffixes. Each endpoint's `node.description` MUST preserve an explicitly
+configured endpoint value; otherwise it MUST equal that endpoint's exact
+`node.name`. Thus the shared presentation title and individual endpoint labels
+have distinct owners.
+
+The module MUST overwrite all three group fields in `capture.props` and
+`playback.props`, even when those values conflict. Callers choose the shared
+title through top-level `node.description` or `node.name`. Both endpoints of a
+queue MUST share one group identity, and simultaneously existing queue instances
+MUST have different group identities even when their configured titles match.
+Clients MUST treat the identity as opaque and connection-lifetime scoped; it is
+not a persistent configured name. `pipewireao.queue.id` remains the queue's
+protocol identity for endpoint association. The generic graph group fields let
+presentation clients group nodes without knowing the queue module or a device's
+vocabulary.
+
+For `queue.storage=copy` with `queue.overflow=drop-oldest`, at any valid capacity,
+the module MUST default both endpoint `media.role` properties to `Analysis`.
+An explicitly configured endpoint `media.role` MUST be preserved. Other storage
+or overflow profiles MUST NOT acquire this role by default. This classification
+identifies the usual observer-isolation profile; it does not establish that all
+downstream consumers are passive observers. Graph clients can combine the role
+with actual consumer topology, keeping processing consumers visible.
+
+Presentation groups do not set execution ownership, graph scheduling, or link
+grouping. The separate `node.group` and `node.link-group` properties retain their
+execution semantics. Native-protocol clients can obtain these presentation
+fields from bound Node info properties, including on servers whose registry
+global properties do not forward custom fields.
 
 ## Boundary and execution model
 

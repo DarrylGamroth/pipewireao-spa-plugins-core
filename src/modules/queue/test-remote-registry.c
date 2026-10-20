@@ -179,6 +179,35 @@ static void on_node_info(void *user_data, const struct pw_node_info *info)
 	maybe_complete(data);
 }
 
+static void check_presentation(const struct test_data *data)
+{
+	const struct node_watch *endpoints[] = { &data->input, &data->output };
+	const char *group_id = NULL;
+
+	for (uint32_t i = 0; i < SPA_N_ELEMENTS(endpoints); i++) {
+		const struct pw_properties *props = endpoints[i]->properties;
+		const char *value;
+
+		CHECK(props != NULL);
+		value = pw_properties_get(props, "pipewireao.graph.group.id");
+		CHECK(value != NULL && value[0] != '\0');
+		if (group_id == NULL)
+			group_id = value;
+		else
+			CHECK(strcmp(value, group_id) == 0);
+		value = pw_properties_get(props, "pipewireao.graph.group.name");
+		CHECK(value != NULL && strcmp(value, "Observer / Queue [exact]-123-456") == 0);
+		value = pw_properties_get(props, "pipewireao.graph.group.class");
+		CHECK(value != NULL && strcmp(value, "Queue") == 0);
+		value = pw_properties_get(props, PW_KEY_NODE_DESCRIPTION);
+		CHECK(value != NULL && strcmp(value, i == 0 ?
+				"Exact input / [123-456]" : "test.remote-queue-output") == 0);
+		value = pw_properties_get(props, PW_KEY_MEDIA_ROLE);
+		CHECK(i == 0 ? value != NULL && strcmp(value, "Production") == 0 :
+				value == NULL);
+	}
+}
+
 static const char *node_diagnostic(const struct node_watch *watch,
 		const char *key)
 {
@@ -688,7 +717,7 @@ int main(int argc, char **argv)
 {
 	struct test_data data = { 0 };
 	struct pw_properties *properties;
-	char module_args[512];
+	char module_args[1024];
 	uint32_t producer_id, observer_id, removals, sequence = 0;
 	bool serve;
 	int length;
@@ -711,12 +740,16 @@ int main(int argc, char **argv)
 	length = snprintf(module_args, sizeof(module_args),
 			"remote.name=%s queue.max-buffers=1 "
 			"queue.overflow=drop-oldest queue.storage=%s "
-			"queue.media=application/ndarray "
-			"capture.props={ node.name=%s } "
+			"queue.media=application/ndarray %s "
+			"capture.props={ node.name=%s %s } "
 			"playback.props={ node.name=%s }",
 			argv[1], serve ? "copy" : "lease",
+			serve ? "" : "node.name=ignored-name "
+				"node.description=\"Observer / Queue [exact]-123-456\"",
 			serve ? "pipewireao-rtc-observation-input" :
 				"test.remote-queue-input",
+			serve ? "" : "node.description=\"Exact input / [123-456]\" "
+				"media.role=Production",
 			serve ? "pipewireao-rtc-observation-output" :
 				"test.remote-queue-output");
 	CHECK(length >= 0 && (size_t)length < sizeof(module_args));
@@ -746,6 +779,7 @@ int main(int argc, char **argv)
 	CHECK(data.input.id != data.output.id);
 	CHECK(data.input_queue_id[0] != '\0');
 	CHECK(strcmp(data.input_queue_id, data.output_queue_id) == 0);
+	check_presentation(&data);
 	producer_id = wait_for_node_id(&data, &data.producer);
 	observer_id = wait_for_node_id(&data, &data.observer);
 	data.capture_link = create_link(&data, producer_id, data.input.id);
