@@ -294,6 +294,13 @@ the module MUST NOT renumber products to hide a gap.
 Verification intent (informative): multi-block payload, Header, Acquisition,
 chunk, and sequence-gap tests in both storage modes.
 
+Capture negotiates Acquisition Version 2 or Version 3. Playback advertises the
+version selected by the capture pool's feature metadata, which is available
+before the first Acquisition payload is initialized. The queue copies that
+payload unchanged, including Version 3 trigger classification. A negotiated
+Acquisition record with missing, ambiguous, or unsupported version features is
+rejected; the default Acquisition version remains Version 2.
+
 ### QUEUE-007 — Lifecycle and lease recovery
 
 Pause, format removal, stream removal, module destruction, and configuration
