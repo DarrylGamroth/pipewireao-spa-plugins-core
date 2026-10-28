@@ -37,6 +37,13 @@ if get_option('tests').allowed()
   )
   test('pipewireao-queue-state', queue_state_test)
 
+  queue_acquisition_test = executable(
+    'pipewireao-queue-acquisition-test',
+    'test-acquisition.c',
+    dependencies: spa_dep,
+  )
+  test('pipewireao-queue-acquisition', queue_acquisition_test)
+
   queue_buffer_test = executable(
     'pipewireao-queue-buffer-test',
     'test-buffer-transfer.c',
@@ -104,6 +111,8 @@ if get_option('tests').allowed()
     )
     foreach name, options : {
       'pipewireao-queue-remote-acquisition': [],
+      'pipewireao-queue-remote-acquisition-v3': ['--acquisition-v3'],
+      'pipewireao-queue-remote-acquisition-v3-queue-only': ['--acquisition-v3', '--queue-only'],
       'pipewireao-queue-remote-acquisition-header': ['--header-only'],
       'pipewireao-queue-remote-acquisition-pause': ['--pause'],
       'pipewireao-queue-remote-acquisition-shared-loop': ['--same-loop'],
