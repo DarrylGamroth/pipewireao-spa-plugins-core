@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: Copyright © 2026 PipeWireAO contributors */
 /* SPDX-License-Identifier: MIT */
 
+#include "acquisition.h"
 #include "buffer-transfer.h"
 #include "queue.h"
 
@@ -1500,7 +1501,7 @@ static int update_capture_params(struct impl *impl)
 	uint8_t buffer[1024];
 	struct spa_pod_builder builder = SPA_POD_BUILDER_INIT(buffer,
 			sizeof(buffer));
-	struct spa_pod_frame acquisition;
+	struct spa_pod_frame acquisition, choice;
 	const struct spa_pod *params[3];
 	uint32_t n_params = 0;
 	uint32_t data_types = impl->storage == STORAGE_LEASE ?
@@ -1528,7 +1529,10 @@ static int update_capture_params(struct impl *impl)
 			SPA_POD_Int((int32_t)sizeof(struct spa_meta_acquisition)), 0);
 	spa_pod_builder_prop(&builder, SPA_PARAM_META_features,
 			SPA_POD_PROP_FLAG_MANDATORY);
-	spa_pod_builder_int(&builder, SPA_META_FEATURE_ACQUISITION_CURRENT);
+	spa_pod_builder_push_choice(&builder, &choice, SPA_CHOICE_Flags, 0);
+	spa_pod_builder_int(&builder, SPA_META_FEATURE_ACQUISITION_VERSION_2 |
+			SPA_META_FEATURE_ACQUISITION_VERSION_3);
+	spa_pod_builder_pop(&builder, &choice);
 	params[n_params++] = spa_pod_builder_pop(&builder, &acquisition);
 	return pw_stream_update_params(impl->capture, params, n_params);
 }
@@ -1599,7 +1603,7 @@ static int configure_playback(struct impl *impl)
 	struct spa_pod_frame acquisition;
 	const struct spa_pod *params[2 + MAX_METAS];
 	struct spa_buffer *sample;
-	uint32_t data_types, i, n_params = 0, size = 0;
+	uint32_t data_types, i, n_params = 0, size = 0, features;
 	int result;
 
 	if (impl->playback == NULL)
@@ -1635,6 +1639,8 @@ static int configure_playback(struct impl *impl)
 		    sample->metas[i].type >= SPA_META_START_features)
 			continue;
 		if (sample->metas[i].type == SPA_META_Acquisition) {
+			if ((result = acquisition_features(sample, &features)) < 0)
+				goto done;
 			spa_pod_builder_push_object(&builder, &acquisition,
 					SPA_TYPE_OBJECT_ParamMeta, SPA_PARAM_Meta);
 			spa_pod_builder_add(&builder,
@@ -1645,8 +1651,7 @@ static int configure_playback(struct impl *impl)
 					0);
 			spa_pod_builder_prop(&builder, SPA_PARAM_META_features,
 					SPA_POD_PROP_FLAG_MANDATORY);
-			spa_pod_builder_int(&builder,
-					SPA_META_FEATURE_ACQUISITION_CURRENT);
+			spa_pod_builder_int(&builder, features);
 			params[n_params++] = spa_pod_builder_pop(&builder,
 					&acquisition);
 			continue;

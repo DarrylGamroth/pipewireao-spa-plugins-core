@@ -90,6 +90,7 @@ struct test_data {
 	bool video;
 	bool queue_only;
 	bool pause_source;
+	uint32_t acquisition_version;
 	int done_seq;
 	bool discovered;
 	struct node_watch input;
@@ -323,7 +324,7 @@ static void producer_process(void *user_data)
 		goto error;
 	acquisition = meta->data;
 	memset(acquisition, 0, sizeof(*acquisition));
-	acquisition->version = SPA_META_ACQUISITION_VERSION;
+	acquisition->version = producer->test->acquisition_version;
 	acquisition->abi_size = SPA_META_ACQUISITION_SIZE;
 	acquisition->flags = SPA_META_ACQUISITION_FLAG_IDENTITY_VALID |
 		SPA_META_ACQUISITION_FLAG_EXPOSURE_START_VALID |
@@ -334,6 +335,11 @@ static void producer_process(void *user_data)
 	acquisition->sequence = sequence;
 	acquisition->exposure_start_nsec = header->pts;
 	acquisition->exposure_duration_nsec = 2000000;
+	if (producer->test->acquisition_version == SPA_META_ACQUISITION_VERSION_3 &&
+	    !spa_meta_acquisition_set_trigger_classification(acquisition,
+		    sequence % 2 ? SPA_META_ACQUISITION_TRIGGER_HIGH :
+		    SPA_META_ACQUISITION_TRIGGER_LOW))
+		goto error;
 publish:
 	if (pw_stream_queue_buffer(producer->stream, pw_buffer) < 0)
 		atomic_fetch_add_explicit(&producer->errors, 1,
@@ -384,7 +390,7 @@ static bool validate_observer_buffer(struct endpoint *observer,
 			!spa_meta_acquisition_is_valid(meta))
 		return false;
 	acquisition = meta->data;
-	if (acquisition->version != SPA_META_ACQUISITION_VERSION ||
+	if (acquisition->version != observer->test->acquisition_version ||
 			acquisition->generation != 1 ||
 			acquisition->sequence != *sequence ||
 			acquisition->domain[0] != 0xa0 ||
@@ -395,6 +401,14 @@ static bool validate_observer_buffer(struct endpoint *observer,
 			acquisition->exposure_start_nsec != header->pts ||
 			acquisition->exposure_duration_nsec != 2000000)
 		return false;
+	if (observer->test->acquisition_version == SPA_META_ACQUISITION_VERSION_3) {
+		enum spa_meta_acquisition_trigger_classification trigger;
+
+		if (!spa_meta_acquisition_get_trigger_classification(acquisition, &trigger) ||
+		    trigger != (*sequence % 2 ? SPA_META_ACQUISITION_TRIGGER_HIGH :
+			    SPA_META_ACQUISITION_TRIGGER_LOW))
+			return false;
+	}
 	for (i = 1; i < SPA_META_ACQUISITION_DOMAIN_SIZE; i++)
 		if (acquisition->domain[i] != 0)
 			return false;
@@ -538,7 +552,10 @@ static void endpoint_param_changed(void *user_data, uint32_t id,
 			SPA_PARAM_META_size, SPA_POD_Int(SPA_META_ACQUISITION_SIZE), 0);
 	spa_pod_builder_prop(&acquisition_builder, SPA_PARAM_META_features,
 			SPA_POD_PROP_FLAG_MANDATORY);
-	spa_pod_builder_int(&acquisition_builder, SPA_META_FEATURE_ACQUISITION_CURRENT);
+	spa_pod_builder_int(&acquisition_builder,
+			endpoint->test->acquisition_version == SPA_META_ACQUISITION_VERSION_3
+			? SPA_META_FEATURE_ACQUISITION_VERSION_3
+			: SPA_META_FEATURE_ACQUISITION_VERSION_2);
 	params[3] = spa_pod_builder_pop(&acquisition_builder, &frame);
 	CHECK(params[0] != NULL && params[1] != NULL && params[2] != NULL &&
 			params[3] != NULL);
@@ -702,14 +719,16 @@ static void diagnostics(struct test_data *data)
 
 int main(int argc, char **argv)
 {
-	struct test_data data = { 0 };
+	struct test_data data = { .acquisition_version = SPA_META_ACQUISITION_VERSION_2 };
 	uint32_t producer_id, observer_id, required_id, flushed = 0;
 	uint64_t start, deadline, next_publication, next_diagnostic;
 	bool passed, paused = false;
 
-	CHECK(argc >= 2 && argc <= 6);
+	CHECK(argc >= 2 && argc <= 7);
 	for (int i = 2; i < argc; i++) {
-		if (strcmp(argv[i], "--header-only") == 0)
+		if (strcmp(argv[i], "--acquisition-v3") == 0)
+			data.acquisition_version = SPA_META_ACQUISITION_VERSION_3;
+		else if (strcmp(argv[i], "--header-only") == 0)
 			data.header_only = true;
 		else if (strcmp(argv[i], "--pause") == 0)
 			data.pause_source = true;
