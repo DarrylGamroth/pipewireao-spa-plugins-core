@@ -21,7 +21,7 @@
 	} \
 } while (0)
 
-static void test_copy(void)
+static void test_copy(uint32_t version)
 {
 	const uint8_t domain[SPA_META_ACQUISITION_DOMAIN_SIZE] = { 1 };
 	const uint8_t grandmaster[SPA_META_ACQUISITION_PTP_CLOCK_ID_SIZE] = { 2 };
@@ -75,6 +75,10 @@ static void test_copy(void)
 	uint32_t i;
 
 	CHECK(spa_meta_acquisition_init(&input_acquisition));
+	if (version == SPA_META_ACQUISITION_VERSION_3)
+		CHECK(spa_meta_acquisition_set_trigger_classification(&input_acquisition,
+				SPA_META_ACQUISITION_TRIGGER_HIGH));
+	CHECK(input_acquisition.version == version);
 	CHECK(spa_meta_acquisition_set_identity(&input_acquisition,
 			domain, 7, 91));
 	CHECK(spa_meta_acquisition_set_exposure_start_ptp(&input_acquisition,
@@ -182,7 +186,8 @@ static void test_lease(void)
 
 int main(void)
 {
-	test_copy();
+	test_copy(SPA_META_ACQUISITION_VERSION_2);
+	test_copy(SPA_META_ACQUISITION_VERSION_3);
 	test_lease();
 	return 0;
 }
