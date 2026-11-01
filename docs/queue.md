@@ -310,7 +310,8 @@ link before capture delivery. The exact capture pool then replaces this offer
 before publication. Playback carries the selected allocation size and exact
 schema feature; missing, ambiguous or unsupported features reject preparation.
 The generic transfer copies the negotiated property allocation unchanged in both
-copy and lease modes, including unknown optional fields. Each consumer validates
+copy and lease modes, including the independent optical/trigger properties and unknown optional
+fields. Each consumer validates
 its required key/type pairs. The queue does not derive optical classification
 from Acquisition trigger classification or introduce defaults for missing keys.
 
@@ -649,6 +650,11 @@ Properties contract in `doc/dox/internals/acquisition-metadata.md`.
   baseline queue fails admission with `-ENOTSUP` and closes its private core.
 - Nine existing focused tests passed: Acquisition negotiation, lifetime, module,
   live lifecycle, remote v2/v3, queue-only v3, Header-only and video MemFd lease.
+
+The typed-trigger follow-up adds property key 2 to byte-copy and all three
+private-core Properties fixtures. All four tests pass, preserving electrical
+trigger classification alongside independent optical classification and
+Acquisition v3. The generic transfer implementation remains unchanged.
 
 These are CPU/native-protocol checks. They do not qualify devices, optical
 classification accuracy, GPU execution or callback deadlines.

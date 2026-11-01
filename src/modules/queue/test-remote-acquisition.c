@@ -345,8 +345,11 @@ static void producer_process(void *user_data)
 		struct spa_meta *properties = spa_buffer_find_meta(buffer, SPA_META_Properties);
 		uint32_t optical = sequence % 4;
 		uint64_t optional = sequence * 111;
+		uint32_t trigger = sequence % 2 ? SPA_META_ACQUISITION_TRIGGER_HIGH : SPA_META_ACQUISITION_TRIGGER_LOW;
 		if (!spa_meta_properties_init(properties) ||
 		    !spa_meta_properties_add(properties, 1, SPA_TYPE_Id, sizeof(optical), &optical) ||
+		    !spa_meta_properties_add(properties, SPA_META_PROPERTY_triggerClassification,
+				SPA_TYPE_Id, sizeof(trigger), &trigger) ||
 		    !spa_meta_properties_add(properties, 17, SPA_TYPE_Long, sizeof(optional), &optional))
 			goto error;
 	}
@@ -422,17 +425,21 @@ static bool validate_observer_buffer(struct endpoint *observer,
 	if (observer->test->buffer_properties) {
 		const struct spa_meta *properties = spa_buffer_find_meta(buffer, SPA_META_Properties);
 		const struct spa_meta_property_requirement required = {1, SPA_TYPE_Id};
-		const struct spa_pod *optical, *optional;
-		uint32_t classification;
+		const struct spa_pod *optical, *optional, *trigger;
+		uint32_t classification, electrical;
 		uint64_t optional_value;
 		if (!spa_meta_properties_is_valid(properties, &required, 1) || properties->size != 128 ||
 		    (optical = spa_meta_properties_find(properties, 1)) == NULL ||
+		    (trigger = spa_meta_properties_find(properties, SPA_META_PROPERTY_triggerClassification)) == NULL ||
+		    !spa_meta_properties_acquisition_is_consistent(properties, meta) ||
 		    (optional = spa_meta_properties_find(properties, 17)) == NULL ||
 		    optional->type != SPA_TYPE_Long || optional->size != sizeof(optional_value))
 			return false;
+		memcpy(&electrical, SPA_POD_BODY_CONST(trigger), sizeof(electrical));
 		memcpy(&classification, SPA_POD_BODY_CONST(optical), sizeof(classification));
 		memcpy(&optional_value, SPA_POD_BODY_CONST(optional), sizeof(optional_value));
-		if (classification != *sequence % 4 || optional_value != *sequence * 111)
+		if (electrical != (*sequence % 2 ? SPA_META_ACQUISITION_TRIGGER_HIGH : SPA_META_ACQUISITION_TRIGGER_LOW) ||
+		    classification != *sequence % 4 || optional_value != *sequence * 111)
 			return false;
 	}
 	for (i = 1; i < SPA_META_ACQUISITION_DOMAIN_SIZE; i++)
