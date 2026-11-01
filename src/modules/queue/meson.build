@@ -97,6 +97,7 @@ if get_option('tests').allowed()
 
   pipewire_daemon = find_program(
     pipewire_pkg_dep.get_variable(pkgconfig: 'prefix') / 'bin' / 'pipewire-ao',
+    pipewire_pkg_dep.get_variable(pkgconfig: 'confdatadir') / 'pipewire-ao',
     required: false,
   )
   shell = find_program('sh')
@@ -111,6 +112,9 @@ if get_option('tests').allowed()
     )
     foreach name, options : {
       'pipewireao-queue-remote-acquisition': [],
+      'pipewireao-queue-remote-buffer-properties': ['--acquisition-v3', '--buffer-properties'],
+      'pipewireao-queue-remote-buffer-properties-queue-only': ['--acquisition-v3', '--queue-only', '--buffer-properties'],
+      'pipewireao-queue-remote-buffer-properties-lease': ['--lease', '--acquisition-v3', '--queue-only', '--buffer-properties'],
       'pipewireao-queue-remote-acquisition-v3': ['--acquisition-v3'],
       'pipewireao-queue-remote-acquisition-v3-queue-only': ['--acquisition-v3', '--queue-only'],
       'pipewireao-queue-remote-acquisition-header': ['--header-only'],

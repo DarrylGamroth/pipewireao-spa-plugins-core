@@ -1502,7 +1502,7 @@ static int update_capture_params(struct impl *impl)
 	struct spa_pod_builder builder = SPA_POD_BUILDER_INIT(buffer,
 			sizeof(buffer));
 	struct spa_pod_frame acquisition, choice;
-	const struct spa_pod *params[3];
+	const struct spa_pod *params[4];
 	uint32_t n_params = 0;
 	uint32_t data_types = impl->storage == STORAGE_LEASE ?
 			((1u << SPA_DATA_MemFd) | (1u << SPA_DATA_DmaBuf)) :
@@ -1533,6 +1533,15 @@ static int update_capture_params(struct impl *impl)
 	spa_pod_builder_int(&builder, SPA_META_FEATURE_ACQUISITION_VERSION_2 |
 			SPA_META_FEATURE_ACQUISITION_VERSION_3);
 	spa_pod_builder_pop(&builder, &choice);
+	params[n_params++] = spa_pod_builder_pop(&builder, &acquisition);
+	spa_pod_builder_push_object(&builder, &acquisition,
+			SPA_TYPE_OBJECT_ParamMeta, SPA_PARAM_Meta);
+	spa_pod_builder_add(&builder,
+			SPA_PARAM_META_type, SPA_POD_Id(SPA_META_Properties),
+			SPA_PARAM_META_size, SPA_POD_CHOICE_RANGE_Int(SPA_META_PROPERTIES_MAX_SIZE,
+				SPA_META_PROPERTIES_MIN_SIZE, SPA_META_PROPERTIES_MAX_SIZE), 0);
+	spa_pod_builder_prop(&builder, SPA_PARAM_META_features, SPA_POD_PROP_FLAG_MANDATORY);
+	spa_pod_builder_int(&builder, SPA_META_FEATURE_PROPERTIES_VERSION_1);
 	params[n_params++] = spa_pod_builder_pop(&builder, &acquisition);
 	return pw_stream_update_params(impl->capture, params, n_params);
 }
@@ -1638,6 +1647,37 @@ static int configure_playback(struct impl *impl)
 		if (sample->metas[i].type == SPA_META_Busy ||
 		    sample->metas[i].type >= SPA_META_START_features)
 			continue;
+		if (sample->metas[i].type == SPA_META_Properties) {
+			uint32_t count = 0;
+			for (uint32_t j = 0; j < sample->n_metas; j++) {
+				const struct spa_meta *meta = &sample->metas[j];
+				if ((meta->type >> 16) != SPA_META_Properties)
+					continue;
+				if (meta->type != SPA_META_TYPE_FEATURES(SPA_META_Properties,
+						SPA_META_FEATURE_PROPERTIES_VERSION_1) || meta->size != 0) {
+					result = -ENOTSUP;
+					goto done;
+				}
+				count++;
+			}
+			if (count != 1 || sample->metas[i].data == NULL ||
+			    !SPA_IS_ALIGNED(sample->metas[i].data, 8) ||
+			    sample->metas[i].size < SPA_META_PROPERTIES_MIN_SIZE ||
+			    sample->metas[i].size > SPA_META_PROPERTIES_MAX_SIZE ||
+			    (sample->metas[i].size & 7u) != 0) {
+				result = -EINVAL;
+				goto done;
+			}
+			spa_pod_builder_push_object(&builder, &acquisition,
+					SPA_TYPE_OBJECT_ParamMeta, SPA_PARAM_Meta);
+			spa_pod_builder_add(&builder,
+					SPA_PARAM_META_type, SPA_POD_Id(SPA_META_Properties),
+					SPA_PARAM_META_size, SPA_POD_Int(sample->metas[i].size), 0);
+			spa_pod_builder_prop(&builder, SPA_PARAM_META_features, SPA_POD_PROP_FLAG_MANDATORY);
+			spa_pod_builder_int(&builder, SPA_META_FEATURE_PROPERTIES_VERSION_1);
+			params[n_params++] = spa_pod_builder_pop(&builder, &acquisition);
+			continue;
+		}
 		if (sample->metas[i].type == SPA_META_Acquisition) {
 			if ((result = acquisition_features(sample, &features)) < 0)
 				goto done;
@@ -1706,6 +1746,10 @@ static void maybe_configure_playback(struct impl *impl)
 
 static int setup_playback_endpoint(struct impl *impl)
 {
+	uint8_t storage[256];
+	struct spa_pod_builder builder = SPA_POD_BUILDER_INIT(storage, sizeof(storage));
+	struct spa_pod_frame frame;
+	const struct spa_pod *params[1];
 	enum pw_stream_flags flags = PW_STREAM_FLAG_RT_PROCESS |
 			PW_STREAM_FLAG_NO_CONVERT | PW_STREAM_FLAG_INACTIVE;
 
@@ -1720,11 +1764,21 @@ static int setup_playback_endpoint(struct impl *impl)
 		flags |= PW_STREAM_FLAG_ALLOC_BUFFERS;
 	else
 		flags |= PW_STREAM_FLAG_MAP_BUFFERS;
+	/* Support Properties before a downstream link requests buffers. The exact
+	 * capture allocation replaces this offer before anything is published. */
+	spa_pod_builder_push_object(&builder, &frame, SPA_TYPE_OBJECT_ParamMeta, SPA_PARAM_Meta);
+	spa_pod_builder_add(&builder,
+			SPA_PARAM_META_type, SPA_POD_Id(SPA_META_Properties),
+			SPA_PARAM_META_size, SPA_POD_CHOICE_RANGE_Int(SPA_META_PROPERTIES_MAX_SIZE,
+				SPA_META_PROPERTIES_MIN_SIZE, SPA_META_PROPERTIES_MAX_SIZE), 0);
+	spa_pod_builder_prop(&builder, SPA_PARAM_META_features, SPA_POD_PROP_FLAG_MANDATORY);
+	spa_pod_builder_int(&builder, SPA_META_FEATURE_PROPERTIES_VERSION_1);
+	params[0] = spa_pod_builder_pop(&builder, &frame);
 	/* Connect without a usable format.  The stable node and port are visible
 	 * immediately; configure_playback publishes the capture pool's exact format
 	 * and buffer contract once that generation is ready. */
 	return pw_stream_connect(impl->playback, PW_DIRECTION_OUTPUT,
-			PW_ID_ANY, flags, NULL, 0);
+			PW_ID_ANY, flags, params, SPA_N_ELEMENTS(params));
 }
 
 static void capture_param_changed(void *data, uint32_t id,

@@ -26,23 +26,27 @@ static void test_copy(uint32_t version)
 	const uint8_t domain[SPA_META_ACQUISITION_DOMAIN_SIZE] = { 1 };
 	const uint8_t grandmaster[SPA_META_ACQUISITION_PTP_CLOCK_ID_SIZE] = { 2 };
 	uint8_t input_bytes[24], output_bytes[24];
-	struct spa_meta_header input_header = { .seq = 42, .pts = 1234 };
+	uint64_t input_properties[16], output_properties[16];
+	uint32_t optical = SPA_META_OPTICAL_MIXED;
+	struct spa_meta_header input_header = { .seq = 91, .pts = 1234 };
 	struct spa_meta_header output_header = { 0 };
 	struct spa_meta_acquisition input_acquisition;
 	struct spa_meta_acquisition output_acquisition = { 0 };
 	struct spa_meta_busy input_busy = { .count = 9 };
 	struct spa_meta_busy output_busy = { .count = 3 };
-	struct spa_meta input_metas[3] = {
+	struct spa_meta input_metas[4] = {
 		{ SPA_META_Header, sizeof(input_header), &input_header },
 		{ SPA_META_Acquisition, sizeof(input_acquisition),
 				&input_acquisition },
+		{ SPA_META_Properties, sizeof(input_properties), input_properties },
 		{ SPA_META_Busy, sizeof(input_busy), &input_busy },
 	};
-	struct spa_meta output_metas[3] = {
+	struct spa_meta output_metas[4] = {
 		{ SPA_META_Busy, sizeof(output_busy), &output_busy },
 		{ SPA_META_Acquisition, sizeof(output_acquisition),
 				&output_acquisition },
 		{ SPA_META_Header, sizeof(output_header), &output_header },
+		{ SPA_META_Properties, sizeof(output_properties), output_properties },
 	};
 	struct spa_meta output_header_only = {
 		SPA_META_Header, sizeof(output_header), &output_header,
@@ -65,15 +69,18 @@ static void test_copy(uint32_t version)
 				.maxsize = sizeof(output_bytes), .chunk = &output_chunks[1] },
 	};
 	struct spa_buffer input = {
-		.n_metas = 3, .metas = input_metas,
+		.n_metas = 4, .metas = input_metas,
 		.n_datas = 2, .datas = input_data,
 	};
 	struct spa_buffer output = {
-		.n_metas = 3, .metas = output_metas,
+		.n_metas = 4, .metas = output_metas,
 		.n_datas = 2, .datas = output_data,
 	};
 	uint32_t i;
 
+	CHECK(spa_meta_properties_init(&input_metas[2]));
+	CHECK(spa_meta_properties_add(&input_metas[2], 1, SPA_TYPE_Id, sizeof(optical), &optical));
+	CHECK(spa_meta_properties_add(&input_metas[2], 17, SPA_TYPE_Bytes, 3, "abc"));
 	CHECK(spa_meta_acquisition_init(&input_acquisition));
 	if (version == SPA_META_ACQUISITION_VERSION_3)
 		CHECK(spa_meta_acquisition_set_trigger_classification(&input_acquisition,
@@ -91,6 +98,7 @@ static void test_copy(uint32_t version)
 	CHECK(memcmp(&input_acquisition, &output_acquisition,
 			sizeof(input_acquisition)) == 0);
 	CHECK(output_busy.count == 3);
+	CHECK(memcmp(input_properties, output_properties, sizeof(input_properties)) == 0);
 	CHECK(memcmp(&input_chunks, &output_chunks, sizeof(input_chunks)) == 0);
 	CHECK(memcmp(&input_bytes[3], &output_bytes[3], 7) == 0);
 	CHECK(memcmp(&input_bytes[14], &output_bytes[14], 5) == 0);
@@ -98,7 +106,7 @@ static void test_copy(uint32_t version)
 			output_bytes[19] == 0xa5);
 	/* Busy belongs to the output endpoint and need not be present in the
 	 * producer's buffer layout. */
-	input.n_metas = 2;
+	input.n_metas = 3;
 	output_busy.count = 5;
 	CHECK(pwao_queue_buffer_transfer(&input, &output, true) == 0);
 	CHECK(output_busy.count == 5);
