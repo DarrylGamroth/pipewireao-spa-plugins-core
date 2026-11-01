@@ -303,6 +303,17 @@ Acquisition record with missing, ambiguous, or unsupported version features is
 rejected; the default Acquisition version remains Version 2. Header-only producers
 remain supported; advertising Acquisition does not require a producer to supply it.
 
+Capture also advertises optional `SPA_META_Properties` (ID 13), schema feature
+Version 1 and a 16–4096-byte capacity range. Playback advertises that capability
+before its first capture pool is ready, so a consumer requiring properties can
+link before capture delivery. The exact capture pool then replaces this offer
+before publication. Playback carries the selected allocation size and exact
+schema feature; missing, ambiguous or unsupported features reject preparation.
+The generic transfer copies the negotiated property allocation unchanged in both
+copy and lease modes, including unknown optional fields. Each consumer validates
+its required key/type pairs. The queue does not derive optical classification
+from Acquisition trigger classification or introduce defaults for missing keys.
+
 ### QUEUE-007 — Lifecycle and lease recovery
 
 Pause, format removal, stream removal, module destruction, and configuration
@@ -621,3 +632,23 @@ daemon. Direct pause-transition, incompatible-format recovery, daemon-process
 restart, DmaBuf revocation, fixed-arrival latency distributions,
 controlled-host placement, automated producer-path syscall enforcement, and
 representative ndarray sizes remain open.
+
+### Buffer properties validation (2026-11-01)
+
+Source baseline `6dffd8dc722013ad7c62906042a230420c4e2ecc`; implementation branch
+`codex/buffer-properties`. Native PipeWireAO source baseline `7a2cf5106` with the
+Properties contract in `doc/dox/internals/acquisition-metadata.md`.
+
+- `meson test -C build pipewireao-queue-buffer`: passed property-byte copy and
+  unknown optional Bytes preservation alongside Acquisition v2/v3.
+- `pipewireao-queue-remote-buffer-properties`, `...-queue-only` and `...-lease`:
+  passed under private cores, with 64 publications, retained/dropped samples,
+  all four optical Id values, an unknown optional Long tied to each Acquisition
+  sequence, exact 128-byte capacity and clean core teardown.
+- The same required-properties private-core fixture against the unmodified
+  baseline queue fails admission with `-ENOTSUP` and closes its private core.
+- Nine existing focused tests passed: Acquisition negotiation, lifetime, module,
+  live lifecycle, remote v2/v3, queue-only v3, Header-only and video MemFd lease.
+
+These are CPU/native-protocol checks. They do not qualify devices, optical
+classification accuracy, GPU execution or callback deadlines.

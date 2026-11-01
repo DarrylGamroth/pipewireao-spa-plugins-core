@@ -87,6 +87,7 @@ struct test_data {
 	struct port_identity ports[64];
 	uint32_t n_ports;
 	bool header_only;
+	bool buffer_properties;
 	bool video;
 	bool queue_only;
 	bool pause_source;
@@ -340,6 +341,15 @@ static void producer_process(void *user_data)
 		    sequence % 2 ? SPA_META_ACQUISITION_TRIGGER_HIGH :
 		    SPA_META_ACQUISITION_TRIGGER_LOW))
 		goto error;
+	if (producer->test->buffer_properties) {
+		struct spa_meta *properties = spa_buffer_find_meta(buffer, SPA_META_Properties);
+		uint32_t optical = sequence % 4;
+		uint64_t optional = sequence * 111;
+		if (!spa_meta_properties_init(properties) ||
+		    !spa_meta_properties_add(properties, 1, SPA_TYPE_Id, sizeof(optical), &optical) ||
+		    !spa_meta_properties_add(properties, 17, SPA_TYPE_Long, sizeof(optional), &optional))
+			goto error;
+	}
 publish:
 	if (pw_stream_queue_buffer(producer->stream, pw_buffer) < 0)
 		atomic_fetch_add_explicit(&producer->errors, 1,
@@ -407,6 +417,22 @@ static bool validate_observer_buffer(struct endpoint *observer,
 		if (!spa_meta_acquisition_get_trigger_classification(acquisition, &trigger) ||
 		    trigger != (*sequence % 2 ? SPA_META_ACQUISITION_TRIGGER_HIGH :
 			    SPA_META_ACQUISITION_TRIGGER_LOW))
+			return false;
+	}
+	if (observer->test->buffer_properties) {
+		const struct spa_meta *properties = spa_buffer_find_meta(buffer, SPA_META_Properties);
+		const struct spa_meta_property_requirement required = {1, SPA_TYPE_Id};
+		const struct spa_pod *optical, *optional;
+		uint32_t classification;
+		uint64_t optional_value;
+		if (!spa_meta_properties_is_valid(properties, &required, 1) || properties->size != 128 ||
+		    (optical = spa_meta_properties_find(properties, 1)) == NULL ||
+		    (optional = spa_meta_properties_find(properties, 17)) == NULL ||
+		    optional->type != SPA_TYPE_Long || optional->size != sizeof(optional_value))
+			return false;
+		memcpy(&classification, SPA_POD_BODY_CONST(optical), sizeof(classification));
+		memcpy(&optional_value, SPA_POD_BODY_CONST(optional), sizeof(optional_value));
+		if (classification != *sequence % 4 || optional_value != *sequence * 111)
 			return false;
 	}
 	for (i = 1; i < SPA_META_ACQUISITION_DOMAIN_SIZE; i++)
@@ -518,7 +544,7 @@ static void endpoint_param_changed(void *user_data, uint32_t id,
 {
 	struct endpoint *endpoint = user_data;
 	uint8_t format_storage[1024], buffers_storage[256], header_storage[256],
-		acquisition_storage[256];
+		acquisition_storage[256], properties_storage[256];
 	struct spa_pod_builder acquisition_builder = SPA_POD_BUILDER_INIT(
 			acquisition_storage, sizeof(acquisition_storage));
 	struct spa_pod_frame frame;
@@ -526,7 +552,8 @@ static void endpoint_param_changed(void *user_data, uint32_t id,
 			buffers_storage, sizeof(buffers_storage));
 	struct spa_pod_builder header_builder = SPA_POD_BUILDER_INIT(
 			header_storage, sizeof(header_storage));
-	const struct spa_pod *params[4];
+	const struct spa_pod *params[5];
+	uint32_t n_params = endpoint->test->header_only ? 3 : 4;
 	if (id != SPA_PARAM_Format || param == NULL)
 		return;
 	params[0] = build_format(format_storage, sizeof(format_storage), endpoint->test->video);
@@ -538,6 +565,8 @@ static void endpoint_param_changed(void *user_data, uint32_t id,
 			SPA_POD_Int(PAYLOAD_WORDS * (int32_t)sizeof(uint16_t)),
 			SPA_PARAM_BUFFERS_stride, SPA_POD_Int(SAMPLE_STRIDE),
 			SPA_PARAM_BUFFERS_align, SPA_POD_Int(16),
+			SPA_PARAM_BUFFERS_metaType, SPA_POD_Int(endpoint->test->buffer_properties ?
+				(1u << SPA_META_Properties) : 0),
 			SPA_PARAM_BUFFERS_dataType,
 			SPA_POD_CHOICE_FLAGS_Int(1u << SPA_DATA_MemFd));
 	params[2] = spa_pod_builder_add_object(&header_builder,
@@ -559,7 +588,20 @@ static void endpoint_param_changed(void *user_data, uint32_t id,
 	params[3] = spa_pod_builder_pop(&acquisition_builder, &frame);
 	CHECK(params[0] != NULL && params[1] != NULL && params[2] != NULL &&
 			params[3] != NULL);
-	CHECK(pw_stream_update_params(endpoint->stream, params + 1, endpoint->test->header_only ? 2 : 3) == 0);
+	if (endpoint->test->buffer_properties) {
+		struct spa_pod_builder properties_builder = SPA_POD_BUILDER_INIT(
+				properties_storage, sizeof(properties_storage));
+		spa_pod_builder_push_object(&properties_builder, &frame,
+				SPA_TYPE_OBJECT_ParamMeta, SPA_PARAM_Meta);
+		spa_pod_builder_add(&properties_builder,
+				SPA_PARAM_META_type, SPA_POD_Id(SPA_META_Properties),
+				SPA_PARAM_META_size, SPA_POD_Int(128), 0);
+		spa_pod_builder_prop(&properties_builder, SPA_PARAM_META_features, SPA_POD_PROP_FLAG_MANDATORY);
+		spa_pod_builder_int(&properties_builder, SPA_META_FEATURE_PROPERTIES_VERSION_1);
+		params[n_params++] = spa_pod_builder_pop(&properties_builder, &frame);
+		CHECK(params[n_params - 1] != NULL);
+	}
+	CHECK(pw_stream_update_params(endpoint->stream, params + 1, n_params - 1) == 0);
 }
 
 static void create_endpoint(struct test_data *data, struct endpoint *endpoint,
@@ -724,10 +766,12 @@ int main(int argc, char **argv)
 	uint64_t start, deadline, next_publication, next_diagnostic;
 	bool passed, paused = false;
 
-	CHECK(argc >= 2 && argc <= 6);
+	CHECK(argc >= 2 && argc <= 8);
 	for (int i = 2; i < argc; i++) {
 		if (strcmp(argv[i], "--acquisition-v3") == 0)
 			data.acquisition_version = SPA_META_ACQUISITION_VERSION_3;
+		else if (strcmp(argv[i], "--buffer-properties") == 0)
+			data.buffer_properties = true;
 		else if (strcmp(argv[i], "--header-only") == 0)
 			data.header_only = true;
 		else if (strcmp(argv[i], "--pause") == 0)
