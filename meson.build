@@ -16,7 +16,7 @@ fs = import('fs')
 add_project_arguments('-D_GNU_SOURCE', language: 'c')
 
 spa_pkg_dep = dependency('libspa-ao-0.2', version: '>= 0.2')
-pipewire_pkg_dep = dependency('libpipewire-ao-0.3', version: '>= 1.7')
+pipewire_pkg_dep = dependency('libpipewire-ao-0.3', version: '>= 1.7.3')
 plugin_api_dependencies = []
 if fs.is_dir('include/pipewireao-plugins')
   plugin_include = include_directories('include')

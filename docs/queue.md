@@ -656,5 +656,14 @@ private-core Properties fixtures. All four tests pass, preserving electrical
 trigger classification alongside independent optical classification and
 Acquisition v3. The generic transfer implementation remains unchanged.
 
+Release integration starts from main `2adeb50` and preserves its video,
+Acquisition v3 lease and graph-label coverage. Against native PipeWireAO 1.7.3
+at `15525f80f356b6a122e21067254e6fc0d36377db`,
+`meson test -C build --num-processes 1` with all 23 `pipewireao-queue` selectors
+passed, including the three Properties fixtures, Header-only/video transfer,
+copy/lease modes, lifecycle and registry checks. Each remote fixture used and
+closed a private core. Meson now requires PipeWireAO 1.7.3 for the Properties API;
+the plugin project version remains 0.1.0.
+
 These are CPU/native-protocol checks. They do not qualify devices, optical
 classification accuracy, GPU execution or callback deadlines.

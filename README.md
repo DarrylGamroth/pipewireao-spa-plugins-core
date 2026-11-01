@@ -16,7 +16,7 @@ need their own GitHub repository.
 
 ## Build and stage
 
-The build requires PipeWireAO 1.7 or later, Meson, Ninja, Cargo, Rust, and a
+The build requires PipeWireAO 1.7.3 or later, Meson, Ninja, Cargo, Rust, and a
 sibling `pipewire-rs` checkout used by the Rust workspace.
 
 ```console
