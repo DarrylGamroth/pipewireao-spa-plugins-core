@@ -27,7 +27,7 @@ static void test_copy(uint32_t version)
 	const uint8_t grandmaster[SPA_META_ACQUISITION_PTP_CLOCK_ID_SIZE] = { 2 };
 	uint8_t input_bytes[24], output_bytes[24];
 	uint64_t input_properties[16], output_properties[16];
-	uint32_t optical = SPA_META_OPTICAL_MIXED;
+	uint32_t optical = SPA_META_OPTICAL_MIXED, trigger = SPA_META_ACQUISITION_TRIGGER_HIGH;
 	struct spa_meta_header input_header = { .seq = 91, .pts = 1234 };
 	struct spa_meta_header output_header = { 0 };
 	struct spa_meta_acquisition input_acquisition;
@@ -80,6 +80,8 @@ static void test_copy(uint32_t version)
 
 	CHECK(spa_meta_properties_init(&input_metas[2]));
 	CHECK(spa_meta_properties_add(&input_metas[2], 1, SPA_TYPE_Id, sizeof(optical), &optical));
+	CHECK(spa_meta_properties_add(&input_metas[2], SPA_META_PROPERTY_triggerClassification,
+			SPA_TYPE_Id, sizeof(trigger), &trigger));
 	CHECK(spa_meta_properties_add(&input_metas[2], 17, SPA_TYPE_Bytes, 3, "abc"));
 	CHECK(spa_meta_acquisition_init(&input_acquisition));
 	if (version == SPA_META_ACQUISITION_VERSION_3)
@@ -99,6 +101,8 @@ static void test_copy(uint32_t version)
 			sizeof(input_acquisition)) == 0);
 	CHECK(output_busy.count == 3);
 	CHECK(memcmp(input_properties, output_properties, sizeof(input_properties)) == 0);
+	CHECK(spa_meta_properties_find(&output_metas[3], SPA_META_PROPERTY_triggerClassification) != NULL);
+	CHECK(spa_meta_properties_acquisition_is_consistent(&output_metas[3], &output_metas[1]));
 	CHECK(memcmp(&input_chunks, &output_chunks, sizeof(input_chunks)) == 0);
 	CHECK(memcmp(&input_bytes[3], &output_bytes[3], 7) == 0);
 	CHECK(memcmp(&input_bytes[14], &output_bytes[14], 5) == 0);
