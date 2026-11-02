@@ -291,18 +291,14 @@ link-local and MUST NOT be copied between the input and output links.
 Replacement and drop counters MUST make lost sequence positions observable;
 the module MUST NOT renumber products to hide a gap.
 
-Verification intent (informative): multi-block payload, Header, Acquisition,
+Verification intent (informative): multi-block payload, Header, Properties,
 chunk, and sequence-gap tests in both storage modes.
 
-Capture negotiates Acquisition Version 2 or Version 3. Playback advertises the
-version selected by the capture pool's feature metadata, which is available
-before the first Acquisition payload is initialized. The queue copies that
-payload unchanged, including Version 3 trigger classification. A negotiated
-Acquisition record with missing, ambiguous, or unsupported version features is
-rejected; the default Acquisition version remains Version 2.
-
-Capture also advertises optional `SPA_META_Properties` (ID 13), schema feature
-Version 1 and a 16–4096-byte capacity range. Playback advertises that capability
+Capture advertises `SPA_META_Properties` (ID 13), schema feature Version 1 and a
+16–4096-byte capacity range. Acquisition identity, exposure and clock facts,
+optical classification and electrical trigger classification use independent
+typed keys in this object; retired Acquisition metadata IDs are not negotiated.
+Playback advertises that capability
 before its first capture pool is ready, so a consumer requiring properties can
 link before capture delivery. The exact capture pool then replaces this offer
 before publication. Playback carries the selected allocation size and exact
@@ -632,7 +628,10 @@ restart, DmaBuf revocation, fixed-arrival latency distributions,
 controlled-host placement, automated producer-path syscall enforcement, and
 representative ndarray sizes remain open.
 
-### Buffer properties validation (2026-11-01)
+### Historical additive-properties validation (2026-11-01)
+
+The following records the previous coexistence implementation. It does not
+describe the current transport, which has removed Acquisition records.
 
 Source baseline `6dffd8dc722013ad7c62906042a230420c4e2ecc`; implementation branch
 `codex/buffer-properties`. Native PipeWireAO source baseline `7a2cf5106` with the
@@ -656,3 +655,11 @@ Acquisition v3. The generic transfer implementation remains unchanged.
 
 These are CPU/native-protocol checks. They do not qualify devices, optical
 classification accuracy, GPU execution or callback deadlines.
+
+### Properties-only migration validation (2026-11-01)
+
+Native source `55e80a78a` and queue source `15dea20` replace the retired record
+with Header plus typed Properties. All 17 focused local and private-core queue
+tests pass, including complete identity, duration and clock groups, independent
+optical/electrical facts, unknown optional field preservation, pool reuse, copy
+and lease handling. These checks establish software transport behavior only.
