@@ -293,6 +293,7 @@ impl Node for HermesDecoderNode {
                     )?;
                 }
             }
+            destination.set_properties(source.properties())?;
             destination.set_header(header);
             destination.commit();
             Ok::<(), i32>(())

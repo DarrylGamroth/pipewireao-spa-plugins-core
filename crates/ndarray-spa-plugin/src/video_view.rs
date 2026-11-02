@@ -151,6 +151,7 @@ impl Node for VideoViewNode {
             if !forward_frame(input_buffer, output_buffer, &output_format, header)? {
                 let mut destination = OutputFrame::new(output_buffer, &output_format)?;
                 Self::copy_frame(&source, &output_format, &mut destination)?;
+                destination.set_properties(source.properties())?;
                 destination.set_header(header);
                 destination.commit();
             }

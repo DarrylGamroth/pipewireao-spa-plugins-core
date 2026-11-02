@@ -77,11 +77,32 @@ pub(crate) fn port_param(
             sys::SPA_TYPE_OBJECT_ParamMeta,
             id_,
             vec![
-                property(sys::SPA_PARAM_META_type, id(sys::SPA_META_Header)),
+                Property {
+                    key: sys::SPA_PARAM_META_type,
+                    flags: libspa::pod::PropertyFlags::MANDATORY,
+                    value: id(sys::SPA_META_Header),
+                },
                 property(
                     sys::SPA_PARAM_META_size,
                     Value::Int(size_of::<sys::spa_meta_header>() as i32),
                 ),
+            ],
+        ),
+        sys::SPA_PARAM_Meta if index == 1 => object(
+            sys::SPA_TYPE_OBJECT_ParamMeta,
+            id_,
+            vec![
+                Property {
+                    key: sys::SPA_PARAM_META_type,
+                    flags: libspa::pod::PropertyFlags::MANDATORY,
+                    value: id(sys::SPA_META_Properties),
+                },
+                property(sys::SPA_PARAM_META_size, Value::Int(512)),
+                Property {
+                    key: sys::SPA_PARAM_META_features,
+                    flags: libspa::pod::PropertyFlags::MANDATORY,
+                    value: Value::Int(sys::SPA_META_FEATURE_PROPERTIES_VERSION_1 as i32),
+                },
             ],
         ),
         sys::SPA_PARAM_IO => match (direction, index) {
