@@ -17,6 +17,7 @@
 #include <spa/node/io.h>
 #include <spa/node/node.h>
 #include <spa/param/ndarray-utils.h>
+#include <spa/pod/parser.h>
 #include <spa/support/plugin.h>
 #include <spa/utils/string.h>
 
@@ -32,8 +33,9 @@ struct test_buffer {
 	struct spa_buffer buffer;
 	struct spa_data data;
 	struct spa_chunk chunk;
-	struct spa_meta meta;
+	struct spa_meta metas[2];
 	struct spa_meta_header header;
+	uint64_t properties[64];
 	uint16_t samples[SAMPLE_COUNT];
 };
 
@@ -118,11 +120,14 @@ static void init_buffer(struct test_buffer *storage, bool output)
 	storage->buffer.n_datas = 1;
 	storage->buffer.datas = &storage->data;
 	if (output) {
-		storage->meta.type = SPA_META_Header;
-		storage->meta.size = sizeof(storage->header);
-		storage->meta.data = &storage->header;
-		storage->buffer.n_metas = 1;
-		storage->buffer.metas = &storage->meta;
+		storage->metas[0] = (struct spa_meta) {
+			SPA_META_Header, sizeof(storage->header), &storage->header,
+		};
+		storage->metas[1] = (struct spa_meta) {
+			SPA_META_Properties, sizeof(storage->properties), storage->properties,
+		};
+		storage->buffer.n_metas = SPA_N_ELEMENTS(storage->metas);
+		storage->buffer.metas = storage->metas;
 	}
 }
 
@@ -172,6 +177,50 @@ static struct spa_handle *make_node(const struct spa_handle_factory *factory,
 	return make_node_access(factory, name, NULL, node);
 }
 
+struct metadata_probe {
+	uint32_t types;
+	bool buffers;
+};
+
+static void metadata_result(void *data, int seq SPA_UNUSED, int res,
+		uint32_t type, const void *result)
+{
+	struct metadata_probe *probe = data;
+	const struct spa_result_node_params *params = result;
+	uint32_t metadata_type;
+
+	spa_assert_se(res == 0 && type == SPA_RESULT_TYPE_NODE_PARAMS);
+	if (params->id == SPA_PARAM_Buffers) {
+		int32_t mask;
+		spa_assert_se(spa_pod_parse_object(params->param, SPA_TYPE_OBJECT_ParamBuffers, NULL,
+				SPA_PARAM_BUFFERS_metaType, SPA_POD_Int(&mask)) >= 0);
+		spa_assert_se(mask == ((1u << SPA_META_Header) | (1u << SPA_META_Properties)));
+		probe->buffers = true;
+		return;
+	}
+	spa_assert_se(params->id == SPA_PARAM_Meta);
+	spa_assert_se(spa_pod_parse_object(params->param, SPA_TYPE_OBJECT_ParamMeta, NULL,
+			SPA_PARAM_META_type, SPA_POD_Id(&metadata_type)) >= 0);
+	spa_assert_se(metadata_type == SPA_META_Header || metadata_type == SPA_META_Properties);
+	probe->types |= 1u << metadata_type;
+	if (metadata_type == SPA_META_Properties) {
+		const struct spa_pod_prop *capacity = spa_pod_find_prop(params->param, NULL, SPA_PARAM_META_size);
+		const struct spa_pod_prop *features = spa_pod_find_prop(params->param, NULL, SPA_PARAM_META_features);
+		int32_t version;
+		spa_assert_se(capacity != NULL && capacity->value.type == SPA_TYPE_Choice);
+		spa_assert_se(SPA_POD_CHOICE_VALUE_TYPE(&capacity->value) == SPA_TYPE_Int);
+		spa_assert_se(*(const int32_t *)SPA_POD_CHOICE_VALUES(&capacity->value) == 512);
+		spa_assert_se(features != NULL && features->flags == SPA_POD_PROP_FLAG_MANDATORY);
+		spa_assert_se(spa_pod_get_int(&features->value, &version) == 0 &&
+				version == SPA_META_FEATURE_PROPERTIES_VERSION_1);
+	}
+}
+
+static const struct spa_node_events metadata_events = {
+	SPA_VERSION_NODE_EVENTS,
+	.result = metadata_result,
+};
+
 static void configure_buffers(struct spa_node *node,
 		enum spa_direction direction, struct test_buffer storage[2],
 		struct spa_buffer *buffers[2], struct spa_io_buffers *io)
@@ -187,6 +236,21 @@ static void configure_buffers(struct spa_node *node,
 	for (i = 0; i < 2; i++) {
 		init_buffer(&storage[i], direction == SPA_DIRECTION_OUTPUT);
 		buffers[i] = &storage[i].buffer;
+	}
+	if (direction == SPA_DIRECTION_OUTPUT) {
+		struct metadata_probe probe = { 0 };
+		struct spa_hook listener;
+		spa_assert_se(spa_node_add_listener(node, &listener, &metadata_events, &probe) == 0);
+		spa_assert_se(spa_node_port_enum_params(node, 1, direction, 0,
+				SPA_PARAM_Meta, 0, UINT32_MAX, NULL) == 0);
+		spa_assert_se(spa_node_port_enum_params(node, 2, direction, 0,
+				SPA_PARAM_Buffers, 0, 1, NULL) == 0);
+		spa_assert_se(probe.types == ((1u << SPA_META_Header) | (1u << SPA_META_Properties)) && probe.buffers);
+		spa_hook_remove(&listener);
+		storage[1].buffer.n_metas = 1;
+		spa_assert_se(spa_node_port_use_buffers(node, direction, 0, 0,
+				buffers, 2) == -EINVAL);
+		storage[1].buffer.n_metas = SPA_N_ELEMENTS(storage[1].metas);
 	}
 	spa_assert_se(spa_node_port_use_buffers(node, direction, 0, 0,
 			buffers, 2) == 0);
@@ -270,6 +334,15 @@ static void test_source(const struct spa_handle_factory *factory)
 	spa_assert_se(storage[first_id].header.seq == 1);
 	spa_assert_se((storage[first_id].header.flags &
 			SPA_META_HEADER_FLAG_DISCONT) != 0);
+	spa_assert_se(spa_meta_properties_is_valid(&storage[first_id].metas[1], NULL, 0));
+	spa_assert_se(((struct spa_pod *)storage[first_id].properties)->size ==
+			sizeof(struct spa_pod_object_body));
+	for (uint32_t i = 0; i < 2; i++) {
+		uint32_t trigger = SPA_META_TRIGGER_HIGH;
+		spa_assert_se(spa_meta_properties_add(&storage[i].metas[1],
+				SPA_META_PROPERTY_triggerClassification, 0,
+				SPA_TYPE_Id, sizeof(trigger), &trigger));
+	}
 	io.status = SPA_STATUS_NEED_DATA;
 	spa_assert_se(spa_node_process(node) == SPA_STATUS_OK);
 	raw_write(&stream, updated);
@@ -278,6 +351,9 @@ static void test_source(const struct spa_handle_factory *factory)
 	spa_assert_se(memcmp(storage[io.buffer_id].samples, updated,
 			sizeof(updated)) == 0);
 	spa_assert_se(storage[io.buffer_id].header.seq == 2);
+	spa_assert_se(spa_meta_properties_is_valid(&storage[io.buffer_id].metas[1], NULL, 0));
+	spa_assert_se(spa_meta_properties_find(&storage[io.buffer_id].metas[1],
+			SPA_META_PROPERTY_triggerClassification) == NULL);
 	stop_and_clear(handle, node, SPA_DIRECTION_OUTPUT, &io);
 	raw_close(&stream, true);
 }

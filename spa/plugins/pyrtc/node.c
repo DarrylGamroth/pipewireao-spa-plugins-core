@@ -261,13 +261,31 @@ static int build_port_param(struct impl *self, uint32_t id, uint32_t index,
 				SPA_POD_Int((int32_t)self->format.bytes),
 				SPA_PARAM_BUFFERS_stride,
 				SPA_POD_Int((int32_t)self->format.stride),
+				SPA_PARAM_BUFFERS_metaType,
+				SPA_POD_Int(self->direction == SPA_DIRECTION_OUTPUT ?
+					(1u << SPA_META_Header) | (1u << SPA_META_Properties) : 0),
 				SPA_PARAM_BUFFERS_dataType,
 				SPA_POD_CHOICE_FLAGS_Int((1u << SPA_DATA_MemPtr) |
 						(1u << SPA_DATA_MemFd)));
 		return *param == NULL ? -ENOSPC : 1;
 	case SPA_PARAM_Meta:
-		if (index > 0 || self->direction != SPA_DIRECTION_OUTPUT)
+		if (index > 1 || self->direction != SPA_DIRECTION_OUTPUT)
 			return 0;
+		if (index == 1) {
+			struct spa_pod_frame object;
+
+			spa_pod_builder_push_object(builder, &object,
+					SPA_TYPE_OBJECT_ParamMeta, id);
+			spa_pod_builder_add(builder,
+					SPA_PARAM_META_type, SPA_POD_Id(SPA_META_Properties),
+					SPA_PARAM_META_size, SPA_POD_CHOICE_RANGE_Int(512,
+						SPA_META_PROPERTIES_MIN_SIZE, SPA_META_PROPERTIES_MAX_SIZE), 0);
+			spa_pod_builder_prop(builder, SPA_PARAM_META_features,
+					SPA_POD_PROP_FLAG_MANDATORY);
+			spa_pod_builder_int(builder, SPA_META_FEATURE_PROPERTIES_VERSION_1);
+			*param = spa_pod_builder_pop(builder, &object);
+			return *param == NULL ? -ENOSPC : 1;
+		}
 		*param = spa_pod_builder_add_object(builder,
 				SPA_TYPE_OBJECT_ParamMeta, id,
 				SPA_PARAM_META_type, SPA_POD_Id(SPA_META_Header),
@@ -442,8 +460,9 @@ static int port_use_buffers(void *object, enum spa_direction direction,
 				(data->type != SPA_DATA_MemPtr && data->type != SPA_DATA_MemFd) ||
 				data->maxsize < self->format.bytes || data->chunk == NULL ||
 				(self->direction == SPA_DIRECTION_OUTPUT &&
-				 spa_buffer_find_meta_data(buffers[i], SPA_META_Header,
-						sizeof(struct spa_meta_header)) == NULL))
+				 (spa_buffer_find_meta_data(buffers[i], SPA_META_Header,
+						sizeof(struct spa_meta_header)) == NULL ||
+				  !spa_meta_properties_init(spa_buffer_find_meta(buffers[i], SPA_META_Properties)))))
 			return -EINVAL;
 	}
 	for (i = 0; i < n_buffers; i++) {
@@ -545,7 +564,7 @@ static int process_source(struct impl *self)
 		.pts = SPA_TIME_INVALID,
 	};
 	if ((res = pwao_image_frame_write(output->buffer, &publication,
-			PWAO_IMAGE_FRAME_REQUIRE_HEADER)) < 0)
+			PWAO_IMAGE_FRAME_REQUIRE_HEADER | PWAO_IMAGE_FRAME_REQUIRE_PROPERTIES)) < 0)
 		return res;
 	output->state = BUFFER_PUBLISHED;
 	self->port.io->buffer_id = id;
