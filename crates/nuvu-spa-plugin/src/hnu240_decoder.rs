@@ -225,7 +225,7 @@ impl Node for Hnu240DecoderNode {
             let mut destination = OutputFrame::new(output_buffer, output_format)?;
             let (pixels, pixel_stride) = destination.u16_mut()?;
             decode_frame(carrier, carrier_stride, pixels, pixel_stride)?;
-            destination.set_properties(source.properties())?;
+            destination.set_metadata(source.metadata())?;
             destination.set_header(header);
             destination.commit();
             Ok::<(), i32>(())

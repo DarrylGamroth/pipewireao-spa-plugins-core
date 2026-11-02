@@ -40,6 +40,7 @@ pub struct Port {
     pub(crate) key: PortRef,
     pub(crate) info: sys::spa_port_info,
     pub(crate) params: [sys::spa_param_info; 5],
+    pub(crate) metadata: Vec<sys::spa_meta_requirement>,
     pub(crate) constraints: Box<[FormatConstraint]>,
     pub(crate) format: Option<Format>,
     pub(crate) buffers: [BufferSlot; MAX_BUFFERS],
@@ -76,6 +77,7 @@ impl Port {
                 n_params: 0,
             },
             params: [param_info(0, 0); 5],
+            metadata: Vec::new(),
             constraints: constraints.into(),
             format: None,
             buffers: std::array::from_fn(|_| BufferSlot::empty()),
@@ -91,6 +93,85 @@ impl Port {
         port.info.params = port.params.as_mut_ptr();
         port.info.n_params = port.params.len() as u32;
         port
+    }
+
+    /// Sets additional cold metadata capabilities before the port is connected.
+    pub fn set_metadata_records(
+        &mut self,
+        records: &[sys::spa_meta_requirement],
+    ) -> Result<(), i32> {
+        if self.n_buffers != 0 || self.format.is_some() {
+            return Err(-libc::EBUSY);
+        }
+        if records.len() >= sys::SPA_META_MAX_RECORDS as usize {
+            return Err(-libc::ENOSPC);
+        }
+        let mut bytes = size_of::<sys::spa_meta_header>();
+        for (index, record) in records.iter().enumerate() {
+            if record.type_ == sys::SPA_META_Header
+                || record.reserved != 0
+                || record.flags & !sys::SPA_META_REQUIREMENT_REQUIRED != 0
+                || unsafe { sys::spa_meta_type_is_transport_owned(record.type_) }
+                || !unsafe {
+                    sys::spa_meta_record_layout_validate(
+                        record.type_,
+                        record.size,
+                        sys::SPA_META_MAX_BYTES,
+                    )
+                }
+                || records[..index]
+                    .iter()
+                    .any(|other| other.type_ == record.type_)
+            {
+                return Err(-libc::EINVAL);
+            }
+            bytes += (record.size as usize + 7) & !7;
+            if bytes > sys::SPA_META_MAX_BYTES as usize {
+                return Err(-libc::ENOSPC);
+            }
+        }
+        self.metadata = records.to_vec();
+        Ok(())
+    }
+
+    pub(crate) unsafe fn validate_buffer_metadata(
+        &self,
+        buffer: &sys::spa_buffer,
+        facts: bool,
+    ) -> Result<(), i32> {
+        if !unsafe { sys::spa_meta_records_layout_validate(buffer.metas, buffer.n_metas) } {
+            return Err(-libc::EINVAL);
+        }
+        let header = unsafe {
+            sys::spa_meta_records_find(buffer.metas, buffer.n_metas, sys::SPA_META_Header)
+        };
+        if header.is_null() {
+            return Err(-libc::EINVAL);
+        }
+        for required in self
+            .metadata
+            .iter()
+            .filter(|r| r.flags & sys::SPA_META_REQUIREMENT_REQUIRED != 0)
+        {
+            let record =
+                unsafe { sys::spa_meta_records_find(buffer.metas, buffer.n_metas, required.type_) };
+            if record.is_null() || unsafe { (*record).size } != required.size {
+                return Err(-libc::EINVAL);
+            }
+        }
+        if facts
+            && !unsafe {
+                sys::spa_meta_records_validate(
+                    buffer.metas,
+                    buffer.n_metas,
+                    self.metadata.as_ptr(),
+                    self.metadata.len() as u32,
+                )
+            }
+        {
+            return Err(-libc::EINVAL);
+        }
+        Ok(())
     }
 
     /// Returns the stable port reference.
@@ -231,6 +312,10 @@ impl Port {
         if id as usize >= self.n_buffers {
             return Err(-libc::EINVAL);
         }
+        let buffer = self.registered_buffer(id).ok_or(-libc::EINVAL)?;
+        unsafe {
+            self.validate_buffer_metadata(buffer.as_ref().ok_or(-libc::EINVAL)?, true)?;
+        }
         let io = unsafe { self.io.as_mut() }.ok_or(-libc::EIO)?;
         io.buffer_id = id;
         io.status = sys::SPA_STATUS_HAVE_DATA as i32;
@@ -280,5 +365,65 @@ pub(crate) const fn param_info(id: u32, flags: u32) -> sys::spa_param_info {
         user: 0,
         seq: 0,
         padding: [0; 4],
+    }
+}
+
+#[cfg(test)]
+mod metadata_profile_tests {
+    use super::*;
+    #[test]
+    fn required_facts_are_checked_before_publication() {
+        let mut port = Port::new(
+            PortRef {
+                direction: sys::SPA_DIRECTION_OUTPUT,
+                id: 0,
+            },
+            true,
+            false,
+            Vec::<FormatConstraint>::new(),
+        );
+        let requirement = sys::spa_meta_requirement {
+            type_: sys::SPA_META_AcquisitionIdentity,
+            size: size_of::<sys::spa_meta_acquisition_identity>() as u32,
+            flags: sys::SPA_META_REQUIREMENT_REQUIRED,
+            reserved: 0,
+        };
+        port.set_metadata_records(&[requirement]).unwrap();
+        let mut header: sys::spa_meta_header = unsafe { std::mem::zeroed() };
+        let mut identity: sys::spa_meta_acquisition_identity = unsafe { std::mem::zeroed() };
+        let mut metas = [
+            sys::spa_meta {
+                type_: sys::SPA_META_Header,
+                size: size_of::<sys::spa_meta_header>() as u32,
+                data: ptr::from_mut(&mut header).cast(),
+            },
+            sys::spa_meta {
+                type_: requirement.type_,
+                size: requirement.size,
+                data: ptr::from_mut(&mut identity).cast(),
+            },
+        ];
+        let mut buffer = sys::spa_buffer {
+            n_metas: 2,
+            metas: metas.as_mut_ptr(),
+            n_datas: 0,
+            datas: ptr::null_mut(),
+        };
+        let mut io = sys::spa_io_buffers {
+            status: sys::SPA_STATUS_NEED_DATA as i32,
+            buffer_id: 0,
+        };
+        port.io = &mut io;
+        port.n_buffers = 1;
+        port.buffers[0].buffer = &mut buffer;
+        assert!(unsafe { port.validate_buffer_metadata(&buffer, false) }.is_ok());
+        assert_eq!(port.publish_output(0), Err(-libc::EINVAL));
+        assert_eq!(io.status, sys::SPA_STATUS_NEED_DATA as i32);
+        identity.flags = sys::SPA_META_RECORD_VALID;
+        identity.domain[0] = 1;
+        assert_eq!(port.publish_output(0), Ok(()));
+        assert_eq!(io.status, sys::SPA_STATUS_HAVE_DATA as i32);
+        buffer.n_metas = 1;
+        assert!(unsafe { port.validate_buffer_metadata(&buffer, false) }.is_err());
     }
 }

@@ -23,24 +23,25 @@
 
 static void test_copy(void)
 {
-	const uint8_t domain[SPA_ACQUISITION_DOMAIN_SIZE] = { 1 };
-	const uint8_t grandmaster[SPA_EXPOSURE_PTP_CLOCK_ID_SIZE] = { 2 };
 	uint8_t input_bytes[24], output_bytes[24];
-	uint64_t input_properties[64], output_properties[64];
-	uint32_t optical = SPA_META_OPTICAL_MIXED, trigger = SPA_META_TRIGGER_HIGH;
+	uint64_t input_opaque[64] = { 0x1234, UINT64_MAX }, output_opaque[64];
 	struct spa_meta_header input_header = { .seq = 91, .pts = 1234 };
 	struct spa_meta_header output_header = { 0 };
 	struct spa_meta_busy input_busy = { .count = 9 };
 	struct spa_meta_busy output_busy = { .count = 3 };
-	struct spa_meta input_metas[3] = {
+    struct spa_meta_sync_timeline input_sync = { .acquire_point = 11, .release_point = 12 };
+    struct spa_meta_sync_timeline output_sync = { .acquire_point = 77, .release_point = 88 };
+	struct spa_meta input_metas[4] = {
 		{ SPA_META_Header, sizeof(input_header), &input_header },
-		{ SPA_META_Properties, sizeof(input_properties), input_properties },
+		{ 0x3fe, sizeof(input_opaque), input_opaque },
 		{ SPA_META_Busy, sizeof(input_busy), &input_busy },
+        { SPA_META_SyncTimeline, sizeof(input_sync), &input_sync },
 	};
-	struct spa_meta output_metas[3] = {
+	struct spa_meta output_metas[4] = {
 		{ SPA_META_Busy, sizeof(output_busy), &output_busy },
 		{ SPA_META_Header, sizeof(output_header), &output_header },
-		{ SPA_META_Properties, sizeof(output_properties), output_properties },
+		{ 0x3fe, sizeof(output_opaque), output_opaque },
+        { SPA_META_SyncTimeline, sizeof(output_sync), &output_sync },
 	};
 	struct spa_meta output_header_only = {
 		SPA_META_Header, sizeof(output_header), &output_header,
@@ -63,42 +64,23 @@ static void test_copy(void)
 				.maxsize = sizeof(output_bytes), .chunk = &output_chunks[1] },
 	};
 	struct spa_buffer input = {
-		.n_metas = 3, .metas = input_metas,
+		.n_metas = 4, .metas = input_metas,
 		.n_datas = 2, .datas = input_data,
 	};
 	struct spa_buffer output = {
-		.n_metas = 3, .metas = output_metas,
+		.n_metas = 4, .metas = output_metas,
 		.n_datas = 2, .datas = output_data,
 	};
 	uint32_t i;
 
-	CHECK(spa_meta_properties_init(&input_metas[1]));
-	CHECK(spa_meta_properties_add(&input_metas[1], 1, 0, SPA_TYPE_Id, sizeof(optical), &optical));
-	CHECK(spa_meta_properties_add(&input_metas[1], SPA_META_PROPERTY_triggerClassification,
-			0, SPA_TYPE_Id, sizeof(trigger), &trigger));
-	{
-		uint32_t flags = SPA_POD_PROP_FLAG_MANDATORY, timebase = SPA_EXPOSURE_TIMEBASE_TAI, ptp_domain = 3;
-		int64_t start = 123456;
-		CHECK(spa_meta_properties_add(&input_metas[1], 3, flags, SPA_TYPE_Bytes, 16, domain));
-		CHECK(spa_meta_properties_add_uint64(&input_metas[1], 4, flags, UINT64_MAX));
-		CHECK(spa_meta_properties_add_uint64(&input_metas[1], 5, flags, UINT64_MAX));
-		CHECK(spa_meta_properties_add_uint64(&input_metas[1], 6, flags, UINT64_MAX));
-		CHECK(spa_meta_properties_add(&input_metas[1], 7, flags, SPA_TYPE_Long, 8, &start));
-		CHECK(spa_meta_properties_add(&input_metas[1], 8, flags, SPA_TYPE_Id, 4, &timebase));
-		CHECK(spa_meta_properties_add_uint64(&input_metas[1], 9, flags, UINT64_MAX));
-		CHECK(spa_meta_properties_add(&input_metas[1], 10, flags, SPA_TYPE_Bytes, 8, grandmaster));
-		CHECK(spa_meta_properties_add(&input_metas[1], 11, flags, SPA_TYPE_Id, 4, &ptp_domain));
-	}
-	CHECK(spa_meta_properties_add(&input_metas[1], 17, 0, SPA_TYPE_Bytes, 3, "abc"));
 	for (i = 0; i < sizeof(input_bytes); i++)
 		input_bytes[i] = (uint8_t)(i + 1u);
 	memset(output_bytes, 0xa5, sizeof(output_bytes));
 	CHECK(pwao_queue_buffer_transfer(&input, &output, true) == 0);
 	CHECK(memcmp(&input_header, &output_header, sizeof(input_header)) == 0);
 	CHECK(output_busy.count == 3);
-	CHECK(memcmp(input_properties, output_properties, sizeof(input_properties)) == 0);
-	CHECK(spa_meta_properties_find(&output_metas[2], SPA_META_PROPERTY_triggerClassification) != NULL);
-	CHECK(spa_meta_properties_is_valid(&output_metas[2], NULL, 0));
+    CHECK(output_sync.acquire_point == 77 && output_sync.release_point == 88);
+	CHECK(memcmp(input_opaque, output_opaque, sizeof(input_opaque)) == 0);
 	CHECK(memcmp(&input_chunks, &output_chunks, sizeof(input_chunks)) == 0);
 	CHECK(memcmp(&input_bytes[3], &output_bytes[3], 7) == 0);
 	CHECK(memcmp(&input_bytes[14], &output_bytes[14], 5) == 0);
@@ -112,13 +94,12 @@ static void test_copy(void)
 	CHECK(output_busy.count == 5);
 	input_bytes[3] ^= 0xffu;
 	CHECK(input_bytes[3] != output_bytes[3]);
-	/* A consumer may negotiate only Header even when the producer also
-	 * supplies Properties metadata. */
+	/* A preserve port cannot drop an opaque record for a Header-only peer. */
 	output.n_metas = 1;
 	output.metas = &output_header_only;
 	output_header.seq = 0;
-	CHECK(pwao_queue_buffer_transfer(&input, &output, true) == 0);
-	CHECK(output_header.seq == input_header.seq);
+	CHECK(pwao_queue_buffer_transfer(&input, &output, true) == -ENOSPC);
+	CHECK(output_header.seq == 0);
 	output_data[1].maxsize = 18;
 	CHECK(pwao_queue_buffer_transfer(&input, &output, true) < 0);
 }
@@ -192,9 +173,34 @@ static void test_lease(void)
 	CHECK(pwao_queue_buffer_alias(&input, &output, &owned_fd, 1) < 0);
 }
 
+static void test_full_record_capacity(void)
+{
+    uint64_t input_values[64][4] = { 0 }, output_values[64][4] = { 0 };
+    struct spa_meta input_metas[64], output_metas[64];
+    uint8_t input_byte = 7, output_byte = 0;
+    struct spa_chunk input_chunk = { .size = 1 }, output_chunk = { 0 };
+    struct spa_data input_data = { .type = SPA_DATA_MemPtr, .data = &input_byte, .maxsize = 1, .chunk = &input_chunk };
+    struct spa_data output_data = { .type = SPA_DATA_MemPtr, .data = &output_byte, .maxsize = 1, .chunk = &output_chunk };
+    struct spa_buffer input = { .n_metas = 64, .metas = input_metas, .n_datas = 1, .datas = &input_data };
+    struct spa_buffer output = { .n_metas = 64, .metas = output_metas, .n_datas = 1, .datas = &output_data };
+    for (uint32_t i = 0; i < 64; i++) {
+        uint32_t type = i == 0 ? SPA_META_Header : 0x380 + i;
+        uint32_t size = i == 0 ? sizeof(struct spa_meta_header) : 8;
+        input_values[i][0] = i;
+        input_metas[i] = (struct spa_meta) { type, size, input_values[i] };
+        output_metas[i] = (struct spa_meta) { type, size, output_values[i] };
+    }
+    CHECK(pwao_queue_buffer_transfer(&input, &output, true) == 0);
+    CHECK(output_byte == 7);
+    for (uint32_t i = 0; i < 64; i++) CHECK(output_values[i][0] == i);
+    input.n_metas = 65;
+    CHECK(pwao_queue_buffer_transfer(&input, &output, true) == -EINVAL);
+}
+
 int main(void)
 {
 	test_copy();
+    test_full_record_capacity();
 	test_lease();
 	return 0;
 }

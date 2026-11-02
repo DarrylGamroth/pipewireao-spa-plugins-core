@@ -20,6 +20,8 @@ int pwao_queue_buffer_validate_layout(const struct spa_buffer *input,
 			input->n_datas > PWAO_QUEUE_MAX_DATA_BLOCKS ||
 			input->n_datas != output->n_datas ||
 			input->n_metas > PWAO_QUEUE_MAX_METAS ||
+			!spa_meta_records_validate(input->metas, input->n_metas, NULL, 0) ||
+			!spa_meta_records_layout_validate(output->metas, output->n_metas) ||
 			output->n_metas > PWAO_QUEUE_MAX_METAS)
 		return -EINVAL;
 	for (i = 0; i < input->n_metas; i++) {
@@ -28,15 +30,12 @@ int pwao_queue_buffer_validate_layout(const struct spa_buffer *input,
 
 		/* Busy is local to each endpoint. Feature metadata advertises a
 		 * capability and carries no per-buffer value to transfer. */
-		if (in->type == SPA_META_Busy ||
-				in->type >= SPA_META_START_features)
+		if (spa_meta_type_is_transport_owned(in->type))
 			continue;
 		out = spa_buffer_find_meta(output, in->type);
-		/* Metadata is negotiated independently on the queue's capture and
-		 * playback links. Forward the intersection; metadata that only the
-		 * producer supplies is not part of the playback buffer contract. */
+		/* Preserve requires storage for every accepted source record. */
 		if (out == NULL)
-			continue;
+			return -ENOSPC;
 		if (out->size != in->size ||
 				(in->size > 0 && (in->data == NULL || out->data == NULL)))
 			return -EINVAL;
@@ -57,19 +56,6 @@ int pwao_queue_buffer_transfer(const struct spa_buffer *input,
 	result = pwao_queue_buffer_validate_layout(input, output, copy_payload);
 	if (result < 0)
 		return result;
-	for (i = 0; i < input->n_metas; i++) {
-		const struct spa_meta *in = &input->metas[i];
-		struct spa_meta *out;
-
-		if (in->type == SPA_META_Busy ||
-				in->type >= SPA_META_START_features)
-			continue;
-		out = spa_buffer_find_meta(output, in->type);
-		if (out == NULL)
-			continue;
-		if (in->size > 0)
-			memcpy(out->data, in->data, in->size);
-	}
 	for (i = 0; i < input->n_datas; i++) {
 		const struct spa_data *in = &input->datas[i];
 		struct spa_data *out = &output->datas[i];
@@ -84,10 +70,26 @@ int pwao_queue_buffer_transfer(const struct spa_buffer *input,
 					in->chunk->size >
 						out->maxsize - in->chunk->offset)
 				return -EINVAL;
-			memcpy(SPA_PTROFF(out->data, in->chunk->offset, void),
-					SPA_PTROFF(in->data, in->chunk->offset, void),
-					in->chunk->size);
 		}
+	}
+	/* Stack descriptors preserve local Busy/feature entries and avoid metadata
+	 * heap allocation. All record and payload checks precede any writes. */
+	struct spa_meta source[PWAO_QUEUE_MAX_METAS], destination[PWAO_QUEUE_MAX_METAS];
+	uint32_t n_source = 0, n_destination = 0;
+	for (i = 0; i < input->n_metas; i++)
+		if (!spa_meta_type_is_transport_owned(input->metas[i].type))
+			source[n_source++] = input->metas[i];
+	for (i = 0; i < output->n_metas; i++)
+		if (!spa_meta_type_is_transport_owned(output->metas[i].type))
+			destination[n_destination++] = output->metas[i];
+	if (!spa_meta_records_copy(destination, n_destination, source, n_source))
+		return -EINVAL;
+	for (i = 0; i < input->n_datas; i++) {
+		const struct spa_data *in = &input->datas[i];
+		struct spa_data *out = &output->datas[i];
+		if (copy_payload)
+			memcpy(SPA_PTROFF(out->data, in->chunk->offset, void),
+				SPA_PTROFF(in->data, in->chunk->offset, void), in->chunk->size);
 		*out->chunk = *in->chunk;
 	}
 	return 0;

@@ -2,7 +2,7 @@
 
 use pipewireao_spa_node::{
     Factory, Format, FormatConstraint, Header, InputFrame, Node, OutputFrame, Port, PortRef, Rate,
-    forward_frame, shares_data, sys,
+    RetainedMetadata, forward_frame, shares_data, sys,
 };
 
 use crate::config::{
@@ -36,8 +36,7 @@ struct FrameAssemblyNode {
     active_seq: Option<u64>,
     next_row: usize,
     complete_header: Option<Header>,
-    frame_properties: [u64; 512],
-    properties_size: usize,
+    metadata: RetainedMetadata,
     active_flags: u32,
     next_flags: u32,
 }
@@ -47,7 +46,7 @@ impl FrameAssemblyNode {
         self.active_seq = None;
         self.next_row = 0;
         self.active_flags = 0;
-        self.properties_size = 0;
+        self.metadata.clear();
         self.next_flags |= sys::SPA_META_HEADER_FLAG_DISCONT;
     }
 
@@ -165,7 +164,7 @@ impl FrameAssemblyNode {
             if !forward_frame(input_buffer, output_buffer, output_format, Some(header))? {
                 let mut destination = OutputFrame::new(output_buffer, output_format)?;
                 Self::copy_input(source, output_format, &mut destination)?;
-                destination.set_properties(source.properties())?;
+                destination.set_metadata(source.metadata())?;
                 destination.set_header(Some(header));
                 destination.commit();
             }
@@ -197,15 +196,7 @@ impl FrameAssemblyNode {
             Self::copy_frame(&self.frame, output_format, &mut destination)?;
             header.offset = 0;
             header.flags |= sys::SPA_META_HEADER_FLAG_MARKER;
-            let properties = if self.properties_size == 0 {
-                None
-            } else {
-                Some(std::slice::from_raw_parts(
-                    self.frame_properties.as_ptr().cast(),
-                    self.properties_size,
-                ))
-            };
-            destination.set_properties(properties)?;
+            self.metadata.copy_to(&mut destination)?;
             destination.set_header(Some(header));
             destination.commit();
             Ok::<(), i32>(())
@@ -298,8 +289,7 @@ impl Node for FrameAssemblyNode {
             active_seq: None,
             next_row: 0,
             complete_header: None,
-            frame_properties: [0; 512],
-            properties_size: 0,
+            metadata: RetainedMetadata::default(),
             active_flags: 0,
             next_flags: 0,
         })
@@ -331,7 +321,7 @@ impl Node for FrameAssemblyNode {
         self.next_row = 0;
         self.complete_header = None;
         self.active_flags = 0;
-        self.properties_size = 0;
+        self.metadata.clear();
         self.next_flags |= sys::SPA_META_HEADER_FLAG_DISCONT;
     }
 
@@ -382,29 +372,14 @@ impl Node for FrameAssemblyNode {
                 self.abandon_frame();
                 return Ok(sys::SPA_STATUS_NEED_DATA as i32);
             }
-            self.properties_size = source.properties().map_or(0, |properties| {
-                unsafe {
-                    std::ptr::copy_nonoverlapping(
-                        properties.as_ptr(),
-                        self.frame_properties.as_mut_ptr().cast(),
-                        properties.len(),
-                    );
-                }
-                properties.len()
-            });
+            self.metadata.capture(source.metadata())?;
             self.active_seq = Some(header.seq);
             self.next_row = 0;
             self.active_flags =
                 self.next_flags | (header.flags & !sys::SPA_META_HEADER_FLAG_MARKER);
             self.next_flags = 0;
         } else {
-            let retained = unsafe {
-                std::slice::from_raw_parts(
-                    self.frame_properties.as_ptr().cast::<u8>(),
-                    self.properties_size,
-                )
-            };
-            if source.properties().unwrap_or(&[]) != retained {
+            if !self.metadata.matches(source.metadata()) {
                 self.ports[INPUT].consume_input()?;
                 self.abandon_frame();
                 return Ok(sys::SPA_STATUS_NEED_DATA as i32);

@@ -35,7 +35,7 @@ struct test_buffer {
 	struct spa_chunk chunk;
 	struct spa_meta metas[2];
 	struct spa_meta_header header;
-	uint64_t properties[512];
+	struct spa_meta_optical_chopping optical;
 	uint16_t samples[SAMPLE_COUNT];
 };
 
@@ -124,7 +124,7 @@ static void init_buffer(struct test_buffer *storage, bool output)
 			SPA_META_Header, sizeof(storage->header), &storage->header,
 		};
 		storage->metas[1] = (struct spa_meta) {
-			SPA_META_Properties, 512, storage->properties,
+			SPA_META_OpticalChopping, sizeof(storage->optical), &storage->optical,
 		};
 		storage->buffer.n_metas = SPA_N_ELEMENTS(storage->metas);
 		storage->buffer.metas = storage->metas;
@@ -194,28 +194,16 @@ static void metadata_result(void *data, int seq SPA_UNUSED, int res,
 		int32_t mask;
 		spa_assert_se(spa_pod_parse_object(params->param, SPA_TYPE_OBJECT_ParamBuffers, NULL,
 				SPA_PARAM_BUFFERS_metaType, SPA_POD_Int(&mask)) >= 0);
-		spa_assert_se(mask == ((1u << SPA_META_Header) | (1u << SPA_META_Properties)));
+		spa_assert_se(mask == ((1u << SPA_META_Header)));
 		probe->buffers = true;
 		return;
 	}
 	spa_assert_se(params->id == SPA_PARAM_Meta);
 	spa_assert_se(spa_pod_parse_object(params->param, SPA_TYPE_OBJECT_ParamMeta, NULL,
 			SPA_PARAM_META_type, SPA_POD_Id(&metadata_type)) >= 0);
-	spa_assert_se(metadata_type == SPA_META_Header || metadata_type == SPA_META_Properties);
+	spa_assert_se(metadata_type == SPA_META_Header);
 	probe->types |= 1u << metadata_type;
-	if (metadata_type == SPA_META_Properties) {
-		const struct spa_pod_prop *capacity = spa_pod_find_prop(params->param, NULL, SPA_PARAM_META_size);
-		const struct spa_pod_prop *features = spa_pod_find_prop(params->param, NULL, SPA_PARAM_META_features);
-		int32_t version;
-		spa_assert_se(capacity != NULL && capacity->value.type == SPA_TYPE_Choice);
-		spa_assert_se(SPA_POD_CHOICE_VALUE_TYPE(&capacity->value) == SPA_TYPE_Int);
-		spa_assert_se(*(const int32_t *)SPA_POD_CHOICE_VALUES(&capacity->value) == 512);
-		spa_assert_se(((const int32_t *)SPA_POD_CHOICE_VALUES(&capacity->value))[2] ==
-				4096 - sizeof(struct spa_meta_header));
-		spa_assert_se(features != NULL && features->flags == SPA_POD_PROP_FLAG_MANDATORY);
-		spa_assert_se(spa_pod_get_int(&features->value, &version) == 0 &&
-				version == SPA_META_FEATURE_PROPERTIES_VERSION_1);
-	}
+
 }
 
 static const struct spa_node_events metadata_events = {
@@ -247,9 +235,9 @@ static void configure_buffers(struct spa_node *node,
 				SPA_PARAM_Meta, 0, UINT32_MAX, NULL) == 0);
 		spa_assert_se(spa_node_port_enum_params(node, 2, direction, 0,
 				SPA_PARAM_Buffers, 0, 1, NULL) == 0);
-		spa_assert_se(probe.types == ((1u << SPA_META_Header) | (1u << SPA_META_Properties)) && probe.buffers);
+		spa_assert_se(probe.types == ((1u << SPA_META_Header)) && probe.buffers);
 		spa_hook_remove(&listener);
-		storage[1].buffer.n_metas = 1;
+		storage[1].buffer.n_metas = 0;
 		spa_assert_se(spa_node_port_use_buffers(node, direction, 0, 0,
 				buffers, 2) == -EINVAL);
 		storage[1].buffer.n_metas = SPA_N_ELEMENTS(storage[1].metas);
@@ -260,7 +248,7 @@ static void configure_buffers(struct spa_node *node,
 		spa_assert_se(spa_node_port_use_buffers(node, direction, 0, 0,
 				buffers, 2) == -EINVAL);
 		for (i = 0; i < 2; i++)
-			storage[i].metas[1].size = 4064;
+			storage[i].metas[1].size = sizeof(storage[i].optical);
 	}
 	spa_assert_se(spa_node_port_use_buffers(node, direction, 0, 0,
 			buffers, 2) == 0);
@@ -344,14 +332,10 @@ static void test_source(const struct spa_handle_factory *factory)
 	spa_assert_se(storage[first_id].header.seq == 1);
 	spa_assert_se((storage[first_id].header.flags &
 			SPA_META_HEADER_FLAG_DISCONT) != 0);
-	spa_assert_se(spa_meta_properties_is_valid(&storage[first_id].metas[1], NULL, 0));
-	spa_assert_se(((struct spa_pod *)storage[first_id].properties)->size ==
-			sizeof(struct spa_pod_object_body));
+	spa_assert_se(storage[first_id].optical.flags == 0);
 	for (uint32_t i = 0; i < 2; i++) {
-		uint32_t trigger = SPA_META_TRIGGER_HIGH;
-		spa_assert_se(spa_meta_properties_add(&storage[i].metas[1],
-				SPA_META_PROPERTY_triggerClassification, 0,
-				SPA_TYPE_Id, sizeof(trigger), &trigger));
+		storage[i].optical = (struct spa_meta_optical_chopping) {
+			.flags = SPA_META_RECORD_VALID, .classification = SPA_META_OPTICAL_FRINGED };
 	}
 	io.status = SPA_STATUS_NEED_DATA;
 	spa_assert_se(spa_node_process(node) == SPA_STATUS_OK);
@@ -361,9 +345,8 @@ static void test_source(const struct spa_handle_factory *factory)
 	spa_assert_se(memcmp(storage[io.buffer_id].samples, updated,
 			sizeof(updated)) == 0);
 	spa_assert_se(storage[io.buffer_id].header.seq == 2);
-	spa_assert_se(spa_meta_properties_is_valid(&storage[io.buffer_id].metas[1], NULL, 0));
-	spa_assert_se(spa_meta_properties_find(&storage[io.buffer_id].metas[1],
-			SPA_META_PROPERTY_triggerClassification) == NULL);
+	spa_assert_se(storage[io.buffer_id].optical.flags == 0);
+	spa_assert_se(storage[io.buffer_id].optical.classification == 0);
 	stop_and_clear(handle, node, SPA_DIRECTION_OUTPUT, &io);
 	raw_close(&stream, true);
 }

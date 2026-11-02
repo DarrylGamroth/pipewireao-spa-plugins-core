@@ -55,7 +55,7 @@ pub struct InputFrame<'a> {
     stride: usize,
     lines: usize,
     header: Option<Header>,
-    properties: Option<&'a [u8]>,
+    metadata: libspa::buffer::meta::MetadataRecords<'a>,
 }
 
 impl<'a> InputFrame<'a> {
@@ -88,14 +88,14 @@ impl<'a> InputFrame<'a> {
             return Err(-libc::EINVAL);
         }
         let bytes = unsafe { std::slice::from_raw_parts(data.data.cast::<u8>().add(offset), span) };
+        let metadata = unsafe { metadata(buffer)? };
         let header = unsafe { header(buffer).copied().map(Header::from) };
-        let properties = unsafe { properties(buffer)? };
         Ok(Self {
             bytes,
             stride,
             lines,
             header,
-            properties,
+            metadata,
         })
     }
 
@@ -119,9 +119,9 @@ impl<'a> InputFrame<'a> {
         self.header
     }
 
-    /// Complete validated Properties Object bytes, borrowed under the input lease.
-    pub const fn properties(&self) -> Option<&[u8]> {
-        self.properties
+    /// Independent records borrowed for the source lease.
+    pub fn metadata(&self) -> libspa::buffer::meta::MetadataRecords<'_> {
+        self.metadata
     }
 
     /// Borrows aligned `u16` storage, including line padding before the final line.
@@ -172,9 +172,7 @@ pub struct OutputFrame<'a> {
     stride: usize,
     lines: usize,
     chunk: &'a mut sys::spa_chunk,
-    header: Option<&'a mut sys::spa_meta_header>,
-    properties: Option<&'a mut sys::spa_meta>,
-    properties_set: bool,
+    metadata: &'a mut [sys::spa_meta],
 }
 
 impl<'a> OutputFrame<'a> {
@@ -202,15 +200,28 @@ impl<'a> OutputFrame<'a> {
             return Err(-libc::ENOSPC);
         }
         let bytes = unsafe { std::slice::from_raw_parts_mut(data.data.cast::<u8>(), span) };
-        let header = unsafe { header_mut(buffer) };
-        let properties =
-            unsafe { sys::spa_buffer_find_meta(buffer, sys::SPA_META_Properties).as_mut() };
-        if let Some(meta) = properties.as_ref() {
-            if meta.data.is_null()
-                || !(16..=4096).contains(&meta.size)
-                || meta.size % 8 != 0
-                || (meta.data as usize) % 8 != 0
-            {
+        if buffer.n_metas > sys::SPA_META_MAX_RECORDS
+            || (buffer.n_metas != 0 && buffer.metas.is_null())
+            || !unsafe { sys::spa_meta_records_layout_validate(buffer.metas, buffer.n_metas) }
+        {
+            return Err(-libc::EINVAL);
+        }
+        let metadata = if buffer.n_metas == 0 {
+            &mut []
+        } else {
+            unsafe { std::slice::from_raw_parts_mut(buffer.metas, buffer.n_metas as usize) }
+        };
+        if !metadata
+            .iter()
+            .any(|record| record.type_ == sys::SPA_META_Header)
+        {
+            return Err(-libc::EINVAL);
+        }
+        for record in metadata
+            .iter_mut()
+            .filter(|record| transferable(record.type_))
+        {
+            if !unsafe { sys::spa_meta_record_init(record) } {
                 return Err(-libc::EINVAL);
             }
         }
@@ -219,9 +230,7 @@ impl<'a> OutputFrame<'a> {
             stride,
             lines,
             chunk,
-            header,
-            properties,
-            properties_set: false,
+            metadata,
         })
     }
 
@@ -240,21 +249,28 @@ impl<'a> OutputFrame<'a> {
         self.lines
     }
 
-    /// Copies input header metadata when this output has standard Header meta.
+    /// Replaces the output publication Header in its sole negotiated record.
     pub fn set_header(&mut self, header: Option<Header>) {
-        if let Some(destination) = self.header.as_deref_mut() {
-            *destination = header
-                .map(Into::into)
-                .unwrap_or_else(|| unsafe { std::mem::zeroed() });
+        if let Some(meta) = self
+            .metadata
+            .iter_mut()
+            .find(|meta| meta.type_ == sys::SPA_META_Header)
+        {
+            unsafe {
+                *meta.data.cast::<sys::spa_meta_header>() =
+                    header.map(Into::into).unwrap_or_else(|| std::mem::zeroed());
+            }
         }
     }
 
-    /// Preserve every validated property, including unknown optional fields.
-    pub fn set_properties(&mut self, source: Option<&[u8]>) -> Result<(), i32> {
+    /// Preserve every accepted record, including opaque optional payloads.
+    pub fn set_metadata(
+        &mut self,
+        source: libspa::buffer::meta::MetadataRecords<'_>,
+    ) -> Result<(), i32> {
         unsafe {
-            copy_properties(source, self.properties.as_deref_mut())?;
+            copy_metadata(source.as_raw(), self.metadata)?;
         }
-        self.properties_set = true;
         Ok(())
     }
 
@@ -280,14 +296,6 @@ impl<'a> OutputFrame<'a> {
 
     /// Marks the complete output span valid for publication.
     pub fn commit(&mut self) {
-        if !self.properties_set {
-            if let Some(meta) = self.properties.as_deref_mut() {
-                // Registered Properties allocations have negotiated alignment and bounds.
-                unsafe {
-                    sys::spa_meta_properties_init(meta);
-                }
-            }
-        }
         self.chunk.offset = 0;
         self.chunk.size = self.bytes.len() as u32;
         self.chunk.stride = self.stride as i32;
@@ -308,86 +316,29 @@ impl<'a> OutputFrame<'a> {
     }
 }
 
-unsafe fn properties<'a>(buffer: *const sys::spa_buffer) -> Result<Option<&'a [u8]>, i32> {
-    let buffer = unsafe { buffer.as_ref() }.ok_or(-libc::EINVAL)?;
-    if buffer.n_metas != 0 && buffer.metas.is_null() {
-        return Err(-libc::EINVAL);
-    }
-    let metas = if buffer.n_metas == 0 {
-        &[][..]
-    } else {
-        unsafe { std::slice::from_raw_parts(buffer.metas, buffer.n_metas as usize) }
-    };
-    let mut allocation = None;
-    for meta in metas {
-        if matches!(meta.type_, 11 | 12) || matches!(meta.type_ >> 16, 11 | 12) {
-            return Err(-libc::EINVAL);
-        }
-        if meta.type_ != sys::SPA_META_Properties {
-            continue;
-        }
-        if allocation.is_some()
-            || meta.data.is_null()
-            || !(16..=4096).contains(&meta.size)
-            || meta.size % 8 != 0
-            || (meta.data as usize) % 8 != 0
-        {
-            return Err(-libc::EINVAL);
-        }
-        let storage = unsafe { std::slice::from_raw_parts(meta.data.cast(), meta.size as usize) };
-        libspa::buffer::meta::BufferProperties::from_bytes(storage, &[])
-            .map_err(|_| -libc::EINVAL)?;
-        // Preserve the complete Object; negotiated allocations may have different capacities.
-        let pod = unsafe { &*meta.data.cast::<sys::spa_pod>() };
-        allocation = Some(&storage[..size_of::<sys::spa_pod>() + pod.size as usize]);
-    }
-    Ok(allocation)
-}
-
-unsafe fn copy_properties(
-    source: Option<&[u8]>,
-    destination: Option<&mut sys::spa_meta>,
-) -> Result<(), i32> {
-    let Some(destination) = destination else {
-        return if source.is_some() {
-            Err(-libc::ENOSPC)
-        } else {
-            Ok(())
-        };
-    };
-    if destination.data.is_null()
-        || !(16..=4096).contains(&destination.size)
-        || destination.size % 8 != 0
-        || (destination.data as usize) % 8 != 0
+unsafe fn metadata<'a>(
+    buffer: &sys::spa_buffer,
+) -> Result<libspa::buffer::meta::MetadataRecords<'a>, i32> {
+    if buffer.n_metas > sys::SPA_META_MAX_RECORDS || (buffer.n_metas != 0 && buffer.metas.is_null())
     {
         return Err(-libc::EINVAL);
     }
-    if let Some(source) = source {
-        libspa::buffer::meta::BufferProperties::from_bytes(source, &[])
-            .map_err(|_| -libc::EINVAL)?;
-        if (destination.size as usize) < source.len() {
-            return Err(-libc::ENOSPC);
-        }
-        if destination.data.cast::<u8>() != source.as_ptr().cast_mut() {
-            unsafe {
-                std::ptr::copy(source.as_ptr(), destination.data.cast(), source.len());
-            }
-        }
-        unsafe {
-            std::ptr::write_bytes(
-                destination.data.cast::<u8>().add(source.len()),
-                0,
-                destination.size as usize - source.len(),
-            );
-        }
-    } else if !unsafe { sys::spa_meta_properties_init(destination) } {
-        return Err(-libc::EINVAL);
-    }
-
-    Ok(())
+    let metas = if buffer.n_metas == 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(buffer.metas, buffer.n_metas as usize) }
+    };
+    let required = [sys::spa_meta_requirement {
+        type_: sys::SPA_META_Header,
+        size: 32,
+        flags: sys::SPA_META_REQUIREMENT_REQUIRED,
+        reserved: 0,
+    }];
+    unsafe { libspa::buffer::meta::MetadataRecords::from_raw(metas, &required) }
+        .map_err(|_| -libc::EINVAL)
 }
 
-unsafe fn header(buffer: *const sys::spa_buffer) -> Option<&'static sys::spa_meta_header> {
+unsafe fn header<'a>(buffer: *const sys::spa_buffer) -> Option<&'a sys::spa_meta_header> {
     unsafe {
         sys::spa_buffer_find_meta_data(
             buffer,
@@ -399,7 +350,7 @@ unsafe fn header(buffer: *const sys::spa_buffer) -> Option<&'static sys::spa_met
     }
 }
 
-unsafe fn header_mut(buffer: *mut sys::spa_buffer) -> Option<&'static mut sys::spa_meta_header> {
+unsafe fn header_mut<'a>(buffer: *mut sys::spa_buffer) -> Option<&'a mut sys::spa_meta_header> {
     unsafe {
         sys::spa_buffer_find_meta_data(
             buffer,
@@ -506,95 +457,196 @@ pub unsafe fn forward_frame(
     let input_chunk = unsafe { input_data.chunk.as_ref() }.ok_or(-libc::EINVAL)?;
     let chunk = *input_chunk;
     let output_chunk = unsafe { output_data.chunk.as_mut() }.ok_or(-libc::EINVAL)?;
+    let destination = if output.n_metas == 0 {
+        &mut []
+    } else {
+        if output.n_metas > sys::SPA_META_MAX_RECORDS || output.metas.is_null() {
+            return Err(-libc::EINVAL);
+        }
+        unsafe { std::slice::from_raw_parts_mut(output.metas, output.n_metas as usize) }
+    };
+    unsafe {
+        copy_metadata(source.metadata().as_raw(), destination)?;
+    }
+    if let (Some(destination), Some(header)) = (unsafe { header_mut(output) }, frame_header) {
+        *destination = header.into();
+    }
     if !std::ptr::eq(input_chunk, output_chunk) {
         *output_chunk = chunk;
     }
-    if let (Some(destination), Some(source)) = (unsafe { header_mut(output) }, frame_header) {
-        *destination = source.into();
-    }
-    unsafe {
-        copy_properties(
-            source.properties(),
-            sys::spa_buffer_find_meta(output, sys::SPA_META_Properties).as_mut(),
-        )?;
-    }
     Ok(true)
+}
+
+fn transferable(type_id: u32) -> bool {
+    !unsafe { sys::spa_meta_type_is_transport_owned(type_id) }
+}
+
+unsafe fn copy_metadata(
+    source: &[sys::spa_meta],
+    destination: &mut [sys::spa_meta],
+) -> Result<(), i32> {
+    let mut src: [sys::spa_meta; 64] = unsafe { std::mem::zeroed() };
+    let mut dst = src;
+    let (mut ns, mut nd) = (0, 0);
+    for record in source.iter().filter(|r| transferable(r.type_)) {
+        src[ns] = *record;
+        ns += 1;
+    }
+    for record in destination.iter().filter(|r| transferable(r.type_)) {
+        dst[nd] = *record;
+        nd += 1;
+    }
+    if !unsafe { sys::spa_meta_records_copy(dst.as_mut_ptr(), nd as u32, src.as_ptr(), ns as u32) }
+    {
+        return Err(-libc::ENOSPC);
+    }
+    Ok(())
+}
+
+/// Fixed-capacity owned metadata retained across row-block buffer leases.
+/// Publication Header and endpoint-local synchronization are handled separately.
+pub struct RetainedMetadata {
+    layouts: [[u32; 3]; 64],
+    count: usize,
+    storage: [u64; 512],
+}
+impl Default for RetainedMetadata {
+    fn default() -> Self {
+        Self {
+            layouts: [[0; 3]; 64],
+            count: 0,
+            storage: [0; 512],
+        }
+    }
+}
+impl RetainedMetadata {
+    /// Clear retained facts on a reset or incomplete frame.
+    pub fn clear(&mut self) {
+        self.count = 0;
+        self.storage.fill(0);
+    }
+    /// Copy every accepted non-Header source record within the fixed budget.
+    pub fn capture(
+        &mut self,
+        source: libspa::buffer::meta::MetadataRecords<'_>,
+    ) -> Result<(), i32> {
+        self.clear();
+        let mut offset = 0usize;
+        for record in source.iter().filter(|record| {
+            transferable(record.type_id()) && record.type_id() != sys::SPA_META_Header
+        }) {
+            let end = offset
+                .checked_add(record.size().next_multiple_of(8))
+                .ok_or(-libc::ENOSPC)?;
+            if self.count == 64 || end > 4096 {
+                self.clear();
+                return Err(-libc::ENOSPC);
+            }
+            self.layouts[self.count] = [record.type_id(), record.size() as u32, offset as u32];
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    record.bytes().expect("immutable fact").as_ptr(),
+                    self.storage.as_mut_ptr().cast::<u8>().add(offset),
+                    record.size(),
+                );
+            }
+            self.count += 1;
+            offset = end;
+        }
+        Ok(())
+    }
+    /// Compare scientific records while allowing each block's Header to vary.
+    pub fn matches(&self, source: libspa::buffer::meta::MetadataRecords<'_>) -> bool {
+        let mut count = 0;
+        for record in source.iter().filter(|record| {
+            transferable(record.type_id()) && record.type_id() != sys::SPA_META_Header
+        }) {
+            let Some(layout) = self.layouts[..self.count]
+                .iter()
+                .find(|layout| layout[0] == record.type_id())
+            else {
+                return false;
+            };
+            if layout[1] as usize != record.size() {
+                return false;
+            }
+            let bytes = unsafe {
+                std::slice::from_raw_parts(
+                    self.storage.as_ptr().cast::<u8>().add(layout[2] as usize),
+                    layout[1] as usize,
+                )
+            };
+            if Some(bytes) != record.bytes() {
+                return false;
+            }
+            count += 1;
+        }
+        count == self.count
+    }
+    /// Populate the owned output's negotiated records; reject missing capacity.
+    pub fn copy_to(&self, output: &mut OutputFrame<'_>) -> Result<(), i32> {
+        let mut raw: [sys::spa_meta; 64] = unsafe { std::mem::zeroed() };
+        for (record, layout) in raw.iter_mut().zip(&self.layouts[..self.count]) {
+            *record = sys::spa_meta {
+                type_: layout[0],
+                size: layout[1],
+                data: unsafe {
+                    self.storage
+                        .as_ptr()
+                        .cast::<u8>()
+                        .add(layout[2] as usize)
+                        .cast_mut()
+                        .cast()
+                },
+            };
+        }
+        let records =
+            unsafe { libspa::buffer::meta::MetadataRecords::from_raw(&raw[..self.count], &[]) }
+                .map_err(|_| -libc::EINVAL)?;
+        output.set_metadata(records)
+    }
 }
 
 #[cfg(test)]
 mod metadata_tests {
     use super::*;
-    use libspa::buffer::meta::{
-        AcquisitionDomain, AcquisitionIdentity, BufferProperties, BufferPropertiesBuilder,
-    };
-
-    fn bytes(words: &mut [u64]) -> &mut [u8] {
-        unsafe {
-            std::slice::from_raw_parts_mut(words.as_mut_ptr().cast(), std::mem::size_of_val(words))
-        }
-    }
-
     #[test]
-    fn properties_copy_preserves_unknown_facts_and_reuse_clears_them() {
-        let mut input = [0u64; 64];
-        let mut output = [u64::MAX; 64];
-        let mut builder = BufferPropertiesBuilder::new(bytes(&mut input)).unwrap();
-        builder
-            .add_acquisition_identity(AcquisitionIdentity::new(
-                AcquisitionDomain::new([1; 16]).unwrap(),
-                u64::MAX,
-                17,
-            ))
-            .unwrap();
-        builder
-            .add(123, 0, sys::SPA_TYPE_Int, &42i32.to_ne_bytes())
-            .unwrap();
-        builder.finish(&[]).unwrap();
-        let mut destination = sys::spa_meta {
-            type_: sys::SPA_META_Properties,
-            size: 512,
-            data: output.as_mut_ptr().cast(),
-        };
+    fn retained_records_own_opaque_bytes_and_ignore_per_block_header_changes() {
+        let mut header: sys::spa_meta_header = unsafe { std::mem::zeroed() };
+        let mut payload = [u64::MAX, 0x12345678];
+        let raw = [
+            sys::spa_meta {
+                type_: sys::SPA_META_Header,
+                size: 32,
+                data: std::ptr::from_mut(&mut header).cast(),
+            },
+            sys::spa_meta {
+                type_: 0x3fe,
+                size: 16,
+                data: payload.as_mut_ptr().cast(),
+            },
+        ];
+        let mut retained = RetainedMetadata::default();
+        let records =
+            unsafe { libspa::buffer::meta::MetadataRecords::from_raw(&raw, &[]) }.unwrap();
+        retained.capture(records).unwrap();
+        assert!(retained.matches(records));
         unsafe {
-            copy_properties(Some(bytes(&mut input)), Some(&mut destination)).unwrap();
+            (*raw[0].data.cast::<sys::spa_meta_header>()).offset = 42;
         }
-        let properties = BufferProperties::from_bytes(bytes(&mut output), &[]).unwrap();
-        assert_eq!(
-            properties.acquisition_identity().unwrap().generation(),
-            u64::MAX
-        );
-        assert_eq!(properties.get(123).unwrap().get_int().unwrap(), 42);
+        let records =
+            unsafe { libspa::buffer::meta::MetadataRecords::from_raw(&raw, &[]) }.unwrap();
+        assert!(retained.matches(records));
         unsafe {
-            copy_properties(None, Some(&mut destination)).unwrap();
+            *raw[1].data.cast::<u64>() = 99;
         }
-        let properties = BufferProperties::from_bytes(bytes(&mut output), &[]).unwrap();
-        assert!(properties.acquisition_identity().is_none());
-        assert!(properties.get(123).is_none());
-    }
-
-    #[test]
-    fn shared_properties_are_preserved_and_missing_destination_fails_closed() {
-        let mut input = [0u64; 64];
-        let mut builder = BufferPropertiesBuilder::new(bytes(&mut input)).unwrap();
-        builder.add_exposure_duration(u64::MAX).unwrap();
-        builder.finish(&[]).unwrap();
-        let mut destination = sys::spa_meta {
-            type_: sys::SPA_META_Properties,
-            size: 512,
-            data: input.as_mut_ptr().cast(),
-        };
-        unsafe {
-            copy_properties(Some(bytes(&mut input)), Some(&mut destination)).unwrap();
-        }
-        assert_eq!(
-            BufferProperties::from_bytes(bytes(&mut input), &[])
-                .unwrap()
-                .exposure_duration(),
-            Some(u64::MAX)
-        );
-        assert_eq!(
-            unsafe { copy_properties(Some(bytes(&mut input)), None) },
-            Err(-libc::ENOSPC)
-        );
+        let records =
+            unsafe { libspa::buffer::meta::MetadataRecords::from_raw(&raw, &[]) }.unwrap();
+        assert!(!retained.matches(records));
+        retained.clear();
+        assert!(!retained.matches(records));
+        assert!(retained.matches(
+            unsafe { libspa::buffer::meta::MetadataRecords::from_raw(&raw[..1], &[]) }.unwrap()
+        ));
     }
 }

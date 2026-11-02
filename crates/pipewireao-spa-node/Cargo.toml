@@ -11,6 +11,7 @@ libc.workspace = true
 libspa.workspace = true
 
 [build-dependencies]
+bindgen = { version = "0.72.1", default-features = false, features = ["runtime"] }
 cc.workspace = true
 pkg-config.workspace = true
 

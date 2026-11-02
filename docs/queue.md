@@ -53,6 +53,7 @@ directional values are not used here.
 | `queue.overflow` | `backpressure`, `drop-oldest`, or `drop-newest`. |
 | `queue.storage` | `copy` or `lease`. |
 | `queue.media` | Optional `application/ndarray` (default) or `video/raw`. |
+| `metadata` | Optional cold array of exact `{type,size,required}` fact layouts. Header is implicit and required. |
 | `node.name` | Optional base name for generated endpoint names and group-title fallback. |
 | `node.description` | Optional exact presentation title for the queue group. |
 | `capture.props` | Optional PipeWire properties for the input stream. |
@@ -262,7 +263,7 @@ Verification intent (informative): pointer or file-descriptor identity checks
 for lease storage, mutation isolation for copy storage, and negative admission
 tests for unshareable storage.
 
-The initial implementation accepts at most eight data blocks and 32 metadata
+The initial implementation accepts at most eight data blocks and 64 metadata
 records per buffer. Copy storage requires CPU-mapped input data. Lease storage
 requires every data block to be a shareable `MemFd` or `DmaBuf`. Explicit
 `SyncTimeline`/`SyncObj` DMA synchronization is rejected in this version;
@@ -291,24 +292,36 @@ link-local and MUST NOT be copied between the input and output links.
 Replacement and drop counters MUST make lost sequence positions observable;
 the module MUST NOT renumber products to hide a gap.
 
-Verification intent (informative): multi-block payload, Header, Properties,
+Verification intent (informative): multi-block payload, Header, independent records,
 chunk, and sequence-gap tests in both storage modes.
 
-Capture advertises `SPA_META_Properties` (ID 13), schema feature Version 1 and a
-16–4096-byte capacity range with a 512-byte default. Acquisition identity,
-exposure and clock facts,
-optical classification and electrical trigger classification use independent
-typed keys in this object; retired Acquisition metadata IDs are not negotiated.
-Playback advertises that capability
-before its first capture pool is ready, so a consumer requiring properties can
-link before capture delivery. The exact capture pool then replaces this offer
-before publication. Playback carries the selected allocation size and exact
-schema feature; missing, ambiguous or unsupported features reject preparation.
-The generic transfer copies the negotiated property allocation unchanged in both
-copy and lease modes, including the independent optical/trigger properties and unknown optional
-fields. Each consumer validates
-its required key/type pairs. The queue does not derive optical classification
-from Acquisition trigger classification or introduce defaults for missing keys.
+Capture and playback default to required standard Header only. An explicit cold
+scientific profile declares each independent PipeWireAO record as a separate
+exact-size ParamMeta capability. Both endpoints share that bounded capability set. Its cold replacement pool preserves every
+accepted source record with its exact type and size; missing output storage
+rejects preparation or publication. Custom types use `SPA_PARAM_META_required`
+allocation negotiation rather than the standard 32-bit metadata mask.
+
+An explicit `metadata` array replaces the default additional records and supplies
+one shared capture/playback capability set. For example,
+`metadata = [ { type = 1022 size = 8 required = true } ]` negotiates an opaque
+extension without changing a central type switch. Type, size and required Bool
+are all explicit; unknown fields and duplicate keys or types fail configuration.
+A consistent Header declaration is allowed once. Retired IDs, mutable transport
+state, incompatible known sizes, more than 64 total entries or more than 4096
+aligned bytes fail cold validation. Both peers must declare custom layouts;
+required missing layouts fail before publication. Queue endpoints default Header
+PTS clock and absolute conversion to `unavailable`; explicit endpoint cold
+properties can describe a known presentation timeline without inventing event time.
+
+COPY and LEASE preserve accepted opaque optional payloads when negotiated output
+storage exists. Transfer validates count, aligned aggregate bytes, singleton
+duplicates and understood record semantics before changing metadata or chunks.
+Busy, SyncTimeline and zero-size feature entries remain transport-owned and link-local. Reuse invalidates stale
+output records. Optical chopping and electrical trigger classification remain
+independent; neither classification is derived from the other. Consumers validate
+their required facts on each input, independently of allocation negotiation.
+Retired metadata IDs 11, 12 and 13 are unsupported.
 
 ### QUEUE-007 — Lifecycle and lease recovery
 
@@ -681,3 +694,43 @@ against Rust core `5a7df70` and the same SDK. The Rust validation used a tempora
 sibling path override, restored before committing. The only Rust build warning
 was the existing native `spa_pod_compare_is_step_of` unused `size` parameter.
 No device or deadline qualification is implied.
+
+
+### Independent-record migration validation (2026-11-02)
+
+Isolated branch `codex/independent-spa-metadata` starts at core `1f2f058`, Rust
+bindings `5a7df70`, and native task source `8bccb6e22`. Native 3.0.0 headers own
+all layouts. The full default Meson build includes the image helper, Rust ndarray,
+HERMES and Nuvu transforms, pyRTC, discard, FITS and queue targets. Rust metadata
+views borrow source records; row-block assembly retains a fixed 4096-byte owned
+copy and compares scientific records independently of changing Header fields.
+
+Validation uses frozen task-only native prefix `pipewireao-independent-spa-metadata-r3`
+(library SHA256 `2503fbc01d72105e70672954c2e879efa8ee7acde730793b12b89514cd9f81cc`):
+`cargo test --workspace --lib`, `meson compile -C build-independent-meta-r3`, and
+`meson test -C build-independent-meta-r3 --print-errorlogs`. The current complete
+SDK-independent suite passes 32 selectors, including a real private-core opaque
+`0x3fe` flow and rejection when its required producer capability is missing.
+Remote selectors create
+and close private cores. They cover ndarray/video COPY and LEASE, Header-only
+profiles, pause and shared-loop operation, full UInt64 identities and alternating
+REALTIME/TAI source event labels. These deterministic event fixtures do not
+establish clock synchronization, physical exposure accuracy or deadlines.
+
+Generic queue and Rust SPA ports default to Header only. Explicit `metadata`
+profiles share the SPA-JSON parser in `spa/plugins/metadata.c`; generated Rust
+bindings use the same cold validation. Required record layouts are checked at
+buffer admission and valid facts before generic SPA input processing/publication.
+Transport-owned Busy, SyncTimeline and feature state remain with their pools;
+retained facts and GUI snapshots omit those payloads.
+
+One earlier daemon teardown returned 139 after all 64 expected deliveries with
+zero queue errors. Nine focused repeats, two prior complete 29-selector matrices,
+and frozen ASAN fanout plus 11 parallel remote variants did not reproduce it.
+The ASAN library SHA256 was
+`a9837520d453b03c177033c844cc0b428858a85cf6c444b183e2f52fed2110cf`,
+daemon SHA256
+`6825eb2b1a463254c2e776f8ee7728fd09497f0a6702726adbc545978dfff637`.
+No causal explanation or lifecycle fix is claimed; the historical observation
+remains open for integration review, separately from the native retention-client
+ownership defect repaired and validated in frozen r4. Prefixes used by running tests were frozen.

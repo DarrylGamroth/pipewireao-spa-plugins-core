@@ -61,6 +61,7 @@ pub(crate) fn port_param(
     direction: sys::spa_direction,
     constraints: &[FormatConstraint],
     format: Option<&Format>,
+    metadata: &[sys::spa_meta_requirement],
 ) -> Result<Option<Value>, i32> {
     let value = match id_ {
         sys::SPA_PARAM_EnumFormat => {
@@ -86,25 +87,26 @@ pub(crate) fn port_param(
                     sys::SPA_PARAM_META_size,
                     Value::Int(size_of::<sys::spa_meta_header>() as i32),
                 ),
+                property(sys::SPA_PARAM_META_required, Value::Bool(true)),
             ],
         ),
-        sys::SPA_PARAM_Meta if index == 1 => object(
-            sys::SPA_TYPE_OBJECT_ParamMeta,
-            id_,
-            vec![
-                Property {
-                    key: sys::SPA_PARAM_META_type,
-                    flags: libspa::pod::PropertyFlags::MANDATORY,
-                    value: id(sys::SPA_META_Properties),
-                },
-                property(sys::SPA_PARAM_META_size, Value::Int(512)),
-                Property {
-                    key: sys::SPA_PARAM_META_features,
-                    flags: libspa::pod::PropertyFlags::MANDATORY,
-                    value: Value::Int(sys::SPA_META_FEATURE_PROPERTIES_VERSION_1 as i32),
-                },
-            ],
-        ),
+        sys::SPA_PARAM_Meta => {
+            let Some(record) = metadata.get(index as usize - 1) else {
+                return Ok(None);
+            };
+            object(
+                sys::SPA_TYPE_OBJECT_ParamMeta,
+                id_,
+                vec![
+                    property(sys::SPA_PARAM_META_type, id(record.type_)),
+                    property(sys::SPA_PARAM_META_size, Value::Int(record.size as i32)),
+                    property(
+                        sys::SPA_PARAM_META_required,
+                        Value::Bool(record.flags & sys::SPA_META_REQUIREMENT_REQUIRED != 0),
+                    ),
+                ],
+            )
+        }
         sys::SPA_PARAM_IO => match (direction, index) {
             (_, 0) => object(
                 sys::SPA_TYPE_OBJECT_ParamIO,
@@ -119,7 +121,7 @@ pub(crate) fn port_param(
             ),
             _ => return Ok(None),
         },
-        sys::SPA_PARAM_Format | sys::SPA_PARAM_Buffers | sys::SPA_PARAM_Meta => return Ok(None),
+        sys::SPA_PARAM_Format | sys::SPA_PARAM_Buffers => return Ok(None),
         _ => return Err(-libc::ENOENT),
     };
     Ok(Some(value))

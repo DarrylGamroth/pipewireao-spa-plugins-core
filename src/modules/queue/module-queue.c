@@ -3,6 +3,7 @@
 
 #include "buffer-transfer.h"
 #include "queue.h"
+#include "../../../spa/plugins/metadata.h"
 
 #include <errno.h>
 #include <inttypes.h>
@@ -141,6 +142,7 @@ struct impl {
 	struct pw_properties *capture_props;
 	struct pw_properties *playback_props;
 	struct spa_pod *format;
+    struct pwao_metadata metadata;
 
 	struct spa_source *stats_timer;
 	struct pwao_queue_ring pending;
@@ -210,6 +212,7 @@ static const struct spa_dict_item module_props[] = {
 		"queue.overflow=<backpressure|drop-oldest|drop-newest> "
 		"queue.storage=<copy|lease> "
 		"queue.media=<application/ndarray|video/raw> "
+        "( metadata=[{type,size,required},...] ) "
 		"( capture.props=<properties> ) "
 		"( playback.props=<properties> )" },
 	{ PW_KEY_MODULE_VERSION, PACKAGE_VERSION },
@@ -1257,8 +1260,10 @@ static int validate_capture_pool(struct impl *impl)
 
 		if (impl->inputs[i].capture == NULL)
 			return -EINVAL;
-		buffer = impl->inputs[i].capture->buffer;
-		if (buffer->n_datas != n_datas ||
+        buffer = impl->inputs[i].capture->buffer;
+        if (!spa_meta_records_layout_validate(buffer->metas, buffer->n_metas))
+            return -EINVAL;
+        if (buffer->n_datas != n_datas ||
 				buffer->n_metas != sample->n_metas)
 			return -EINVAL;
 		for (j = 0; j < sample->n_metas; j++) {
@@ -1497,37 +1502,23 @@ static void playback_remove_buffer(void *data, struct pw_buffer *buffer)
 
 static int update_capture_params(struct impl *impl)
 {
-	uint8_t buffer[1024];
-	struct spa_pod_builder builder = SPA_POD_BUILDER_INIT(buffer,
-			sizeof(buffer));
-	struct spa_pod_frame properties;
-	const struct spa_pod *params[4];
-	uint32_t n_params = 0;
-	uint32_t data_types = impl->storage == STORAGE_LEASE ?
-			((1u << SPA_DATA_MemFd) | (1u << SPA_DATA_DmaBuf)) :
-			((1u << SPA_DATA_MemPtr) | (1u << SPA_DATA_MemFd));
-
-	params[n_params++] = spa_pod_builder_add_object(&builder,
-			SPA_TYPE_OBJECT_ParamBuffers, SPA_PARAM_Buffers,
-			SPA_PARAM_BUFFERS_buffers,
-			SPA_POD_Int((int32_t)(impl->max_buffers + 2u)),
-			SPA_PARAM_BUFFERS_dataType,
-			SPA_POD_CHOICE_FLAGS_Int(data_types));
-	params[n_params++] = spa_pod_builder_add_object(&builder,
-			SPA_TYPE_OBJECT_ParamMeta, SPA_PARAM_Meta,
-			SPA_PARAM_META_type, SPA_POD_Id(SPA_META_Header),
-			SPA_PARAM_META_size,
-			SPA_POD_Int((int32_t)sizeof(struct spa_meta_header)));
-	spa_pod_builder_push_object(&builder, &properties,
-			SPA_TYPE_OBJECT_ParamMeta, SPA_PARAM_Meta);
-	spa_pod_builder_add(&builder,
-			SPA_PARAM_META_type, SPA_POD_Id(SPA_META_Properties),
-			SPA_PARAM_META_size, SPA_POD_CHOICE_RANGE_Int(512,
-				SPA_META_PROPERTIES_MIN_SIZE, SPA_META_PROPERTIES_MAX_SIZE), 0);
-	spa_pod_builder_prop(&builder, SPA_PARAM_META_features, SPA_POD_PROP_FLAG_MANDATORY);
-	spa_pod_builder_int(&builder, SPA_META_FEATURE_PROPERTIES_VERSION_1);
-	params[n_params++] = spa_pod_builder_pop(&builder, &properties);
-	return pw_stream_update_params(impl->capture, params, n_params);
+    uint8_t buffer[PARAM_BUFFER_SIZE];
+    struct spa_pod_builder builder = SPA_POD_BUILDER_INIT(buffer, sizeof(buffer));
+    const struct spa_pod *params[1 + MAX_METAS];
+    uint32_t n_params = 0;
+    uint32_t data_types = impl->storage == STORAGE_LEASE ?
+        ((1u << SPA_DATA_MemFd) | (1u << SPA_DATA_DmaBuf)) : ((1u << SPA_DATA_MemPtr) | (1u << SPA_DATA_MemFd));
+    params[n_params++] = spa_pod_builder_add_object(&builder, SPA_TYPE_OBJECT_ParamBuffers, SPA_PARAM_Buffers,
+        SPA_PARAM_BUFFERS_buffers, SPA_POD_Int((int32_t)(impl->max_buffers + 2u)),
+        SPA_PARAM_BUFFERS_dataType, SPA_POD_CHOICE_FLAGS_Int(data_types));
+    for (uint32_t i = 0; i < impl->metadata.count; i++) {
+        const struct spa_meta_requirement *r = &impl->metadata.records[i];
+        params[n_params++] = spa_pod_builder_add_object(&builder, SPA_TYPE_OBJECT_ParamMeta, SPA_PARAM_Meta,
+            SPA_PARAM_META_type, SPA_POD_Id(r->type), SPA_PARAM_META_size, SPA_POD_Int(r->size),
+            SPA_PARAM_META_required, SPA_POD_Bool(r->flags & SPA_META_REQUIREMENT_REQUIRED));
+    }
+    for (uint32_t i = 0; i < n_params; i++) if (params[i] == NULL) return -ENOSPC;
+    return pw_stream_update_params(impl->capture, params, n_params);
 }
 
 static void playback_state_changed(void *data, enum pw_stream_state old,
@@ -1593,7 +1584,6 @@ static int configure_playback(struct impl *impl)
 	uint8_t buffer[PARAM_BUFFER_SIZE];
 	struct spa_pod_builder builder = SPA_POD_BUILDER_INIT(buffer,
 			sizeof(buffer));
-	struct spa_pod_frame properties;
 	const struct spa_pod *params[2 + MAX_METAS];
 	struct spa_buffer *sample;
 	uint32_t data_types, i, n_params = 0, size = 0;
@@ -1628,42 +1618,10 @@ static int configure_playback(struct impl *impl)
 			SPA_PARAM_BUFFERS_dataType,
 			SPA_POD_CHOICE_FLAGS_Int(data_types));
 	for (i = 0; i < sample->n_metas; i++) {
-		if (sample->metas[i].type == SPA_META_Busy ||
-		    sample->metas[i].type >= SPA_META_START_features)
+		if (spa_meta_type_is_transport_owned(sample->metas[i].type))
 			continue;
-		if (sample->metas[i].type == SPA_META_Properties) {
-			uint32_t count = 0;
-			for (uint32_t j = 0; j < sample->n_metas; j++) {
-				const struct spa_meta *meta = &sample->metas[j];
-				if ((meta->type >> 16) != SPA_META_Properties)
-					continue;
-				if (meta->type != SPA_META_TYPE_FEATURES(SPA_META_Properties,
-						SPA_META_FEATURE_PROPERTIES_VERSION_1) || meta->size != 0) {
-					result = -ENOTSUP;
-					goto done;
-				}
-				count++;
-			}
-			if (count != 1 || sample->metas[i].data == NULL ||
-			    !SPA_IS_ALIGNED(sample->metas[i].data, 8) ||
-			    sample->metas[i].size < SPA_META_PROPERTIES_MIN_SIZE ||
-			    sample->metas[i].size > SPA_META_PROPERTIES_MAX_SIZE ||
-			    (sample->metas[i].size & 7u) != 0) {
-				result = -EINVAL;
-				goto done;
-			}
-			spa_pod_builder_push_object(&builder, &properties,
-					SPA_TYPE_OBJECT_ParamMeta, SPA_PARAM_Meta);
-			spa_pod_builder_add(&builder,
-					SPA_PARAM_META_type, SPA_POD_Id(SPA_META_Properties),
-					SPA_PARAM_META_size, SPA_POD_Int(sample->metas[i].size), 0);
-			spa_pod_builder_prop(&builder, SPA_PARAM_META_features, SPA_POD_PROP_FLAG_MANDATORY);
-			spa_pod_builder_int(&builder, SPA_META_FEATURE_PROPERTIES_VERSION_1);
-			params[n_params++] = spa_pod_builder_pop(&builder, &properties);
-			continue;
-		}
-		if (sample->metas[i].type == 11 || sample->metas[i].type == 12) {
-			result = -ENOTSUP;
+		if (!spa_meta_record_validate(&sample->metas[i], false)) {
+			result = -EINVAL;
 			goto done;
 		}
 		params[n_params++] = spa_pod_builder_add_object(&builder,
@@ -1671,7 +1629,8 @@ static int configure_playback(struct impl *impl)
 				SPA_PARAM_META_type,
 				SPA_POD_Id(sample->metas[i].type),
 				SPA_PARAM_META_size,
-				SPA_POD_Int((int32_t)sample->metas[i].size));
+				SPA_POD_Int((int32_t)sample->metas[i].size),
+				SPA_PARAM_META_required, SPA_POD_Bool(true));
 	}
 
 	/* Updating the buffer contract toggles PipeWire's parameter serial and
@@ -1716,10 +1675,9 @@ static void maybe_configure_playback(struct impl *impl)
 
 static int setup_playback_endpoint(struct impl *impl)
 {
-	uint8_t storage[256];
+	uint8_t storage[PARAM_BUFFER_SIZE];
 	struct spa_pod_builder builder = SPA_POD_BUILDER_INIT(storage, sizeof(storage));
-	struct spa_pod_frame frame;
-	const struct spa_pod *params[1];
+	const struct spa_pod *params[MAX_METAS];
 	enum pw_stream_flags flags = PW_STREAM_FLAG_RT_PROCESS |
 			PW_STREAM_FLAG_NO_CONVERT | PW_STREAM_FLAG_INACTIVE;
 
@@ -1734,21 +1692,18 @@ static int setup_playback_endpoint(struct impl *impl)
 		flags |= PW_STREAM_FLAG_ALLOC_BUFFERS;
 	else
 		flags |= PW_STREAM_FLAG_MAP_BUFFERS;
-	/* Support Properties before a downstream link requests buffers. The exact
-	 * capture allocation replaces this offer before anything is published. */
-	spa_pod_builder_push_object(&builder, &frame, SPA_TYPE_OBJECT_ParamMeta, SPA_PARAM_Meta);
-	spa_pod_builder_add(&builder,
-			SPA_PARAM_META_type, SPA_POD_Id(SPA_META_Properties),
-			SPA_PARAM_META_size, SPA_POD_CHOICE_RANGE_Int(512,
-				SPA_META_PROPERTIES_MIN_SIZE, SPA_META_PROPERTIES_MAX_SIZE), 0);
-	spa_pod_builder_prop(&builder, SPA_PARAM_META_features, SPA_POD_PROP_FLAG_MANDATORY);
-	spa_pod_builder_int(&builder, SPA_META_FEATURE_PROPERTIES_VERSION_1);
-	params[0] = spa_pod_builder_pop(&builder, &frame);
+    for (uint32_t i = 0; i < impl->metadata.count; i++) {
+        const struct spa_meta_requirement *r = &impl->metadata.records[i];
+        params[i] = spa_pod_builder_add_object(&builder, SPA_TYPE_OBJECT_ParamMeta, SPA_PARAM_Meta,
+            SPA_PARAM_META_type, SPA_POD_Id(r->type), SPA_PARAM_META_size, SPA_POD_Int(r->size),
+            SPA_PARAM_META_required, SPA_POD_Bool(r->flags & SPA_META_REQUIREMENT_REQUIRED));
+        if (params[i] == NULL) return -ENOSPC;
+    }
 	/* Connect without a usable format.  The stable node and port are visible
 	 * immediately; configure_playback publishes the capture pool's exact format
 	 * and buffer contract once that generation is ready. */
 	return pw_stream_connect(impl->playback, PW_DIRECTION_OUTPUT,
-			PW_ID_ANY, flags, params, SPA_N_ELEMENTS(params));
+			PW_ID_ANY, flags, params, impl->metadata.count);
 }
 
 static void capture_param_changed(void *data, uint32_t id,
@@ -2124,7 +2079,9 @@ static const struct pw_impl_module_events module_events = {
 
 static int parse_options(struct impl *impl, const struct pw_properties *props)
 {
-	const char *value;
+    const char *value;
+    int metadata_result = pwao_metadata_parse(&impl->metadata, pw_properties_get(props, "metadata"));
+    if (metadata_result < 0) return metadata_result;
 
 	value = pw_properties_get(props, "queue.max-buffers");
 	if (value == NULL || !spa_atou32(value, &impl->max_buffers, 10) ||
@@ -2213,6 +2170,10 @@ static int setup_properties(struct impl *impl, struct pw_properties *props,
 	endpoints[1] = impl->playback_props;
 	for (uint32_t i = 0; i < SPA_N_ELEMENTS(endpoints); i++) {
 		struct pw_properties *endpoint = endpoints[i];
+        if (pw_properties_get(endpoint, "pipewireao.header.pts.clock") == NULL)
+            pw_properties_set(endpoint, "pipewireao.header.pts.clock", "unavailable");
+        if (pw_properties_get(endpoint, "pipewireao.header.pts.absolute-conversion") == NULL)
+            pw_properties_set(endpoint, "pipewireao.header.pts.absolute-conversion", "unavailable");
 
 		/* Presentation grouping is independent of execution/link grouping. */
 		pw_properties_set(endpoint, "pipewireao.graph.group.id", group_id);

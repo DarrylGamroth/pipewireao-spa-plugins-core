@@ -22,6 +22,11 @@ if [ "${1:-}" = "--lease" ]; then
     config=$runtime_dir/lease.conf
 fi
 for option in "$@"; do
+    if [ "$option" = "--opaque" ] || [ "$option" = "--opaque-missing" ]; then
+        sed '/metadata =/c\        metadata = [ { type = 1022 size = 8 required = true } ]' \
+            "$config" >"$runtime_dir/opaque.conf"
+        config=$runtime_dir/opaque.conf
+    fi
     if [ "$option" = "--video" ]; then
         sed 's/queue.media = application\/ndarray/queue.media = video\/raw/' \
             "$config" >"$runtime_dir/video.conf"
@@ -42,7 +47,11 @@ cleanup() {
         fi
     fi
     cat "$runtime_dir/daemon.log"
-    rm -r -- "$runtime_dir"
+    if [ "$result" -ne 0 ] && [ "${PIPEWIREAO_QUEUE_TEST_KEEP_FAILURES:-0}" = "1" ]; then
+        echo "failed-runtime-preserved=$runtime_dir"
+    else
+        rm -r -- "$runtime_dir"
+    fi
     exit "$result"
 }
 trap cleanup EXIT HUP INT TERM

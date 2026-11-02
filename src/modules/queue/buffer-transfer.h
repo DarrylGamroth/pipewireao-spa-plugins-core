@@ -10,7 +10,7 @@
 #include <spa/buffer/buffer.h>
 
 #define PWAO_QUEUE_MAX_DATA_BLOCKS 8u
-#define PWAO_QUEUE_MAX_METAS 32u
+#define PWAO_QUEUE_MAX_METAS 64u
 
 int pwao_queue_buffer_validate_layout(const struct spa_buffer *input,
 		const struct spa_buffer *output, bool require_output_capacity);

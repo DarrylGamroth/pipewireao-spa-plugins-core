@@ -56,12 +56,12 @@ snapshot and carries that value as Header sequence. Header PTS remains invalid
 because pyRTC records an absolute realtime timestamp rather than the active
 PipeWire graph clock.
 
-Source buffers require Header and version-1 BufferProperties, with a 512-byte
-Properties default and a 4064-byte maximum, reserving the Header's 32 bytes in
-the 4096-byte metadata budget. Each publication clears that Object to valid empty metadata:
-the pyRTC ABI supplies no physical acquisition identity, exposure, electrical or
-optical facts. The bridge does not manufacture them from its write counter or
-realtime timestamp.
+Source buffers require standard Header. Each publication invalidates extra
+negotiated record slots before writing its publication Header. The pyRTC ABI
+supplies no physical acquisition identity, exposure, electrical or optical facts;
+this adapter does not manufacture them from its write counter or realtime
+storage timestamp. Telemetry requiring an absolute source event must use an
+explicit profile that supplies a qualified event or labels recorder receipt time.
 
 pyRTC `ImageSHM.write()` copies the payload before updating the count and
 timestamp and does not expose a writer-in-progress marker or seqlock. The

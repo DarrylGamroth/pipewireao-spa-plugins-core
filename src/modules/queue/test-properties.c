@@ -18,56 +18,21 @@
 	} \
 } while (0)
 
-static struct spa_pod *meta(struct spa_pod_builder *builder,
-		uint32_t features, bool choice)
+static struct spa_pod *meta(struct spa_pod_builder *builder, uint32_t size)
 {
-	struct spa_pod_frame object, flags;
-
-	spa_pod_builder_push_object(builder, &object,
-			SPA_TYPE_OBJECT_ParamMeta, SPA_PARAM_Meta);
-	spa_pod_builder_add(builder,
-			SPA_PARAM_META_type, SPA_POD_Id(SPA_META_Properties),
-			SPA_PARAM_META_size, SPA_POD_Int(512), 0);
-	spa_pod_builder_prop(builder, SPA_PARAM_META_features,
-			SPA_POD_PROP_FLAG_MANDATORY);
-	if (choice) {
-		spa_pod_builder_push_choice(builder, &flags, SPA_CHOICE_Flags, 0);
-		spa_pod_builder_int(builder, features);
-		spa_pod_builder_pop(builder, &flags);
-	} else
-		spa_pod_builder_int(builder, features);
-	return spa_pod_builder_pop(builder, &object);
+	return spa_pod_builder_add_object(builder, SPA_TYPE_OBJECT_ParamMeta, SPA_PARAM_Meta,
+		SPA_PARAM_META_type, SPA_POD_Id(SPA_META_AcquisitionIdentity),
+		SPA_PARAM_META_size, SPA_POD_Int(size),
+		SPA_PARAM_META_required, SPA_POD_Bool(true));
 }
-
-static void filter_features(uint32_t capture, bool choice,
-		uint32_t peer, int expected)
+static void filter_layout(uint32_t peer_size, bool succeeds)
 {
-	uint8_t a[256], b[256], c[256];
-	struct spa_pod_builder capture_builder = SPA_POD_BUILDER_INIT(a, sizeof(a));
-	struct spa_pod_builder peer_builder = SPA_POD_BUILDER_INIT(b, sizeof(b));
+	uint64_t a[64], b[64], c[64];
+	struct spa_pod_builder ours = SPA_POD_BUILDER_INIT(a, sizeof(a));
+	struct spa_pod_builder peer = SPA_POD_BUILDER_INIT(b, sizeof(b));
 	struct spa_pod_builder result_builder = SPA_POD_BUILDER_INIT(c, sizeof(c));
 	struct spa_pod *result;
-	int features = 0;
-	int res = spa_pod_filter(&result_builder, &result,
-			meta(&capture_builder, capture, choice),
-			meta(&peer_builder, peer, false));
-
-	if (expected < 0) {
-		CHECK(res < 0);
-		return;
-	}
-	CHECK(res >= 0);
-	spa_pod_fixate(result);
-	CHECK(spa_pod_parse_object(result, SPA_TYPE_OBJECT_ParamMeta, NULL,
-			SPA_PARAM_META_features, SPA_POD_Int(&features)) >= 0);
-	CHECK(features == expected);
+	int res = spa_pod_filter(&result_builder, &result, meta(&ours, 40), meta(&peer, peer_size));
+	CHECK((res >= 0) == succeeds);
 }
-
-int main(void)
-{
-	uint32_t supported = SPA_META_FEATURE_PROPERTIES_VERSION_1;
-	filter_features(supported, false, supported, supported);
-	filter_features(supported, false, 2, -1);
-	filter_features(supported, false, 0, -1);
-	return 0;
-}
+int main(void) { filter_layout(40, true); filter_layout(96, false); return 0; }

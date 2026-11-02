@@ -168,7 +168,7 @@ impl<N: Node> State<N> {
             max_output_ports: output_count as u32,
             change_mask: 0,
             flags: self.node_flags(),
-            props: ptr::null_mut(),
+            props: ptr::from_ref(&HEADER_PTS_PROPERTIES.0).cast_mut(),
             params: ptr::null_mut(),
             n_params: self.n_params,
         };
@@ -255,6 +255,22 @@ struct SyncValue<T>(T);
 
 // Factory and method tables are immutable for the process lifetime.
 unsafe impl<T> Sync for SyncValue<T> {}
+
+static HEADER_PTS_ITEMS: SyncValue<[sys::spa_dict_item; 2]> = SyncValue([
+    sys::spa_dict_item {
+        key: c"pipewireao.header.pts.clock".as_ptr(),
+        value: c"unavailable".as_ptr(),
+    },
+    sys::spa_dict_item {
+        key: c"pipewireao.header.pts.absolute-conversion".as_ptr(),
+        value: c"unavailable".as_ptr(),
+    },
+]);
+static HEADER_PTS_PROPERTIES: SyncValue<sys::spa_dict> = SyncValue(sys::spa_dict {
+    flags: 0,
+    n_items: 2,
+    items: HEADER_PTS_ITEMS.0.as_ptr(),
+});
 
 struct Methods<N>(PhantomData<N>);
 
@@ -433,6 +449,22 @@ unsafe extern "C" fn factory_init<N: Node>(
         if handle.is_null() {
             return Err(-libc::EINVAL);
         }
+        let mut node = N::new(info.as_ref())?;
+        let text = if info.is_null() {
+            ptr::null()
+        } else {
+            sys::spa_dict_lookup(info, c"metadata".as_ptr())
+        };
+        if !text.is_null() {
+            let profile = crate::metadata::parse(CStr::from_ptr(text))?;
+            for port in node
+                .ports_mut()
+                .iter_mut()
+                .filter(|port| !port.configuration)
+            {
+                port.set_metadata_records(&profile)?;
+            }
+        }
         let instance = handle.cast::<Handle<N>>();
         ptr::write(
             instance,
@@ -453,7 +485,7 @@ unsafe extern "C" fn factory_init<N: Node>(
                     },
                 },
                 hooks: UnsafeCell::new(std::mem::zeroed()),
-                state: ManuallyDrop::new(CallbackGate::new(State::new(N::new(info.as_ref())?))),
+                state: ManuallyDrop::new(CallbackGate::new(State::new(node))),
             },
         );
         sys::spa_hook_list_init((*instance).hooks.get());
@@ -535,8 +567,9 @@ unsafe extern "C" fn node_add_listener<N: Node>(
         };
         let mut saved = std::mem::zeroed();
         sys::spa_hook_list_isolate(hooks(instance), &mut saved, listener, events.cast(), data);
-        node_info.info.change_mask =
-            (sys::SPA_NODE_CHANGE_MASK_FLAGS | sys::SPA_NODE_CHANGE_MASK_PARAMS) as u64;
+        node_info.info.change_mask = (sys::SPA_NODE_CHANGE_MASK_FLAGS
+            | sys::SPA_NODE_CHANGE_MASK_PARAMS
+            | sys::SPA_NODE_CHANGE_MASK_PROPS) as u64;
         emit_node_info(hooks(instance), node_info.info());
         for mut info in port_info {
             info.info.change_mask =
@@ -733,6 +766,7 @@ unsafe extern "C" fn node_port_enum_params<N: Node>(
                     port.key.direction,
                     &port.constraints,
                     port.format.as_ref(),
+                    &port.metadata,
                 )?
             };
             let Some(value) = value else {
@@ -872,12 +906,16 @@ unsafe extern "C" fn node_port_use_buffers<N: Node>(
         if buffers.is_null() || n_buffers as usize > MAX_BUFFERS {
             return Err(-libc::ENOSPC);
         }
+        let supplied = std::slice::from_raw_parts(buffers, n_buffers as usize);
+        for &buffer in supplied {
+            state.node.ports()[index]
+                .validate_buffer_metadata(buffer.as_ref().ok_or(-libc::EINVAL)?, false)?;
+        }
         let minimum_size = state.node.ports()[index]
             .format
             .as_ref()
             .ok_or(-libc::EIO)?
             .packed_bytes()?;
-        let supplied = std::slice::from_raw_parts(buffers, n_buffers as usize);
         if flags & sys::SPA_NODE_BUFFERS_FLAG_ALLOC != 0 {
             if !state.node.ports()[index].can_allocate_buffers() {
                 return Err(-libc::ENOTSUP);
@@ -1007,6 +1045,21 @@ unsafe extern "C" fn node_process<N: Node>(object: *mut c_void) -> i32 {
         let mut state = claim(instance)?;
         if !state.started {
             return Ok(sys::SPA_STATUS_NEED_DATA as i32);
+        }
+        for port in state
+            .node
+            .ports()
+            .iter()
+            .filter(|port| port.key.direction == sys::SPA_DIRECTION_INPUT)
+        {
+            if let Some(io) = port
+                .io
+                .as_ref()
+                .filter(|io| io.status == sys::SPA_STATUS_HAVE_DATA as i32)
+            {
+                let buffer = port.registered_buffer(io.buffer_id).ok_or(-libc::EINVAL)?;
+                port.validate_buffer_metadata(buffer.as_ref().ok_or(-libc::EINVAL)?, true)?;
+            }
         }
         state.node.process()
     })

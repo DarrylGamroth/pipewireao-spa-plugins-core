@@ -2,6 +2,7 @@ queue_state = static_library(
   'pipewireao-queue-state',
   'queue.c',
   'buffer-transfer.c',
+  '../../../spa/plugins/metadata.c',
   dependencies: [threads_dep, spa_dep],
   gnu_symbol_visibility: 'hidden',
   install: false,
@@ -36,6 +37,10 @@ if get_option('tests').allowed()
     dependencies: [threads_dep, spa_dep],
   )
   test('pipewireao-queue-state', queue_state_test)
+
+  queue_metadata_test = executable('pipewireao-queue-metadata-test',
+    'test-metadata.c', '../../../spa/plugins/metadata.c', dependencies: spa_dep)
+  test('pipewireao-queue-metadata', queue_metadata_test)
 
   queue_properties_test = executable(
     'pipewireao-queue-properties-test',
@@ -113,9 +118,11 @@ if get_option('tests').allowed()
     )
     foreach name, options : {
       'pipewireao-queue-remote-properties': [],
-      'pipewireao-queue-remote-buffer-properties': ['--buffer-properties'],
-      'pipewireao-queue-remote-buffer-properties-queue-only': ['--queue-only', '--buffer-properties'],
-      'pipewireao-queue-remote-buffer-properties-lease': ['--lease', '--queue-only', '--buffer-properties'],
+      'pipewireao-queue-remote-opaque': ['--queue-only', '--opaque'],
+      'pipewireao-queue-remote-opaque-required-missing': ['--queue-only', '--opaque-missing'],
+      'pipewireao-queue-remote-buffer-properties': ['--metadata-records'],
+      'pipewireao-queue-remote-buffer-properties-queue-only': ['--queue-only', '--metadata-records'],
+      'pipewireao-queue-remote-buffer-properties-lease': ['--lease', '--queue-only', '--metadata-records'],
       'pipewireao-queue-remote-properties-header': ['--header-only'],
       'pipewireao-queue-remote-properties-pause': ['--pause'],
       'pipewireao-queue-remote-properties-shared-loop': ['--same-loop'],
