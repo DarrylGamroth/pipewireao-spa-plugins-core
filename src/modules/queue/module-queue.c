@@ -1,7 +1,6 @@
 /* SPDX-FileCopyrightText: Copyright © 2026 PipeWireAO contributors */
 /* SPDX-License-Identifier: MIT */
 
-#include "acquisition.h"
 #include "buffer-transfer.h"
 #include "queue.h"
 
@@ -1501,7 +1500,7 @@ static int update_capture_params(struct impl *impl)
 	uint8_t buffer[1024];
 	struct spa_pod_builder builder = SPA_POD_BUILDER_INIT(buffer,
 			sizeof(buffer));
-	struct spa_pod_frame acquisition, choice;
+	struct spa_pod_frame properties;
 	const struct spa_pod *params[4];
 	uint32_t n_params = 0;
 	uint32_t data_types = impl->storage == STORAGE_LEASE ?
@@ -1519,22 +1518,7 @@ static int update_capture_params(struct impl *impl)
 			SPA_PARAM_META_type, SPA_POD_Id(SPA_META_Header),
 			SPA_PARAM_META_size,
 			SPA_POD_Int((int32_t)sizeof(struct spa_meta_header)));
-	/* Every fan-out peer must advertise Acquisition, otherwise buffer
-	 * negotiation can strip it from the producer's shared pool. */
-	spa_pod_builder_push_object(&builder, &acquisition,
-			SPA_TYPE_OBJECT_ParamMeta, SPA_PARAM_Meta);
-	spa_pod_builder_add(&builder,
-			SPA_PARAM_META_type, SPA_POD_Id(SPA_META_Acquisition),
-			SPA_PARAM_META_size,
-			SPA_POD_Int((int32_t)sizeof(struct spa_meta_acquisition)), 0);
-	spa_pod_builder_prop(&builder, SPA_PARAM_META_features,
-			SPA_POD_PROP_FLAG_MANDATORY);
-	spa_pod_builder_push_choice(&builder, &choice, SPA_CHOICE_Flags, 0);
-	spa_pod_builder_int(&builder, SPA_META_FEATURE_ACQUISITION_VERSION_2 |
-			SPA_META_FEATURE_ACQUISITION_VERSION_3);
-	spa_pod_builder_pop(&builder, &choice);
-	params[n_params++] = spa_pod_builder_pop(&builder, &acquisition);
-	spa_pod_builder_push_object(&builder, &acquisition,
+	spa_pod_builder_push_object(&builder, &properties,
 			SPA_TYPE_OBJECT_ParamMeta, SPA_PARAM_Meta);
 	spa_pod_builder_add(&builder,
 			SPA_PARAM_META_type, SPA_POD_Id(SPA_META_Properties),
@@ -1542,7 +1526,7 @@ static int update_capture_params(struct impl *impl)
 				SPA_META_PROPERTIES_MIN_SIZE, SPA_META_PROPERTIES_MAX_SIZE), 0);
 	spa_pod_builder_prop(&builder, SPA_PARAM_META_features, SPA_POD_PROP_FLAG_MANDATORY);
 	spa_pod_builder_int(&builder, SPA_META_FEATURE_PROPERTIES_VERSION_1);
-	params[n_params++] = spa_pod_builder_pop(&builder, &acquisition);
+	params[n_params++] = spa_pod_builder_pop(&builder, &properties);
 	return pw_stream_update_params(impl->capture, params, n_params);
 }
 
@@ -1609,10 +1593,10 @@ static int configure_playback(struct impl *impl)
 	uint8_t buffer[PARAM_BUFFER_SIZE];
 	struct spa_pod_builder builder = SPA_POD_BUILDER_INIT(buffer,
 			sizeof(buffer));
-	struct spa_pod_frame acquisition;
+	struct spa_pod_frame properties;
 	const struct spa_pod *params[2 + MAX_METAS];
 	struct spa_buffer *sample;
-	uint32_t data_types, i, n_params = 0, size = 0, features;
+	uint32_t data_types, i, n_params = 0, size = 0;
 	int result;
 
 	if (impl->playback == NULL)
@@ -1668,33 +1652,19 @@ static int configure_playback(struct impl *impl)
 				result = -EINVAL;
 				goto done;
 			}
-			spa_pod_builder_push_object(&builder, &acquisition,
+			spa_pod_builder_push_object(&builder, &properties,
 					SPA_TYPE_OBJECT_ParamMeta, SPA_PARAM_Meta);
 			spa_pod_builder_add(&builder,
 					SPA_PARAM_META_type, SPA_POD_Id(SPA_META_Properties),
 					SPA_PARAM_META_size, SPA_POD_Int(sample->metas[i].size), 0);
 			spa_pod_builder_prop(&builder, SPA_PARAM_META_features, SPA_POD_PROP_FLAG_MANDATORY);
 			spa_pod_builder_int(&builder, SPA_META_FEATURE_PROPERTIES_VERSION_1);
-			params[n_params++] = spa_pod_builder_pop(&builder, &acquisition);
+			params[n_params++] = spa_pod_builder_pop(&builder, &properties);
 			continue;
 		}
-		if (sample->metas[i].type == SPA_META_Acquisition) {
-			if ((result = acquisition_features(sample, &features)) < 0)
-				goto done;
-			spa_pod_builder_push_object(&builder, &acquisition,
-					SPA_TYPE_OBJECT_ParamMeta, SPA_PARAM_Meta);
-			spa_pod_builder_add(&builder,
-					SPA_PARAM_META_type,
-					SPA_POD_Id(SPA_META_Acquisition),
-					SPA_PARAM_META_size,
-					SPA_POD_Int((int32_t)sample->metas[i].size),
-					0);
-			spa_pod_builder_prop(&builder, SPA_PARAM_META_features,
-					SPA_POD_PROP_FLAG_MANDATORY);
-			spa_pod_builder_int(&builder, features);
-			params[n_params++] = spa_pod_builder_pop(&builder,
-					&acquisition);
-			continue;
+		if (sample->metas[i].type == 11 || sample->metas[i].type == 12) {
+			result = -ENOTSUP;
+			goto done;
 		}
 		params[n_params++] = spa_pod_builder_add_object(&builder,
 				SPA_TYPE_OBJECT_ParamMeta, SPA_PARAM_Meta,

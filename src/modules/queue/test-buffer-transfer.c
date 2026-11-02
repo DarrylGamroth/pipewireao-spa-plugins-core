@@ -21,30 +21,24 @@
 	} \
 } while (0)
 
-static void test_copy(uint32_t version)
+static void test_copy(void)
 {
-	const uint8_t domain[SPA_META_ACQUISITION_DOMAIN_SIZE] = { 1 };
-	const uint8_t grandmaster[SPA_META_ACQUISITION_PTP_CLOCK_ID_SIZE] = { 2 };
+	const uint8_t domain[SPA_ACQUISITION_DOMAIN_SIZE] = { 1 };
+	const uint8_t grandmaster[SPA_EXPOSURE_PTP_CLOCK_ID_SIZE] = { 2 };
 	uint8_t input_bytes[24], output_bytes[24];
-	uint64_t input_properties[16], output_properties[16];
-	uint32_t optical = SPA_META_OPTICAL_MIXED, trigger = SPA_META_ACQUISITION_TRIGGER_HIGH;
+	uint64_t input_properties[64], output_properties[64];
+	uint32_t optical = SPA_META_OPTICAL_MIXED, trigger = SPA_META_TRIGGER_HIGH;
 	struct spa_meta_header input_header = { .seq = 91, .pts = 1234 };
 	struct spa_meta_header output_header = { 0 };
-	struct spa_meta_acquisition input_acquisition;
-	struct spa_meta_acquisition output_acquisition = { 0 };
 	struct spa_meta_busy input_busy = { .count = 9 };
 	struct spa_meta_busy output_busy = { .count = 3 };
-	struct spa_meta input_metas[4] = {
+	struct spa_meta input_metas[3] = {
 		{ SPA_META_Header, sizeof(input_header), &input_header },
-		{ SPA_META_Acquisition, sizeof(input_acquisition),
-				&input_acquisition },
 		{ SPA_META_Properties, sizeof(input_properties), input_properties },
 		{ SPA_META_Busy, sizeof(input_busy), &input_busy },
 	};
-	struct spa_meta output_metas[4] = {
+	struct spa_meta output_metas[3] = {
 		{ SPA_META_Busy, sizeof(output_busy), &output_busy },
-		{ SPA_META_Acquisition, sizeof(output_acquisition),
-				&output_acquisition },
 		{ SPA_META_Header, sizeof(output_header), &output_header },
 		{ SPA_META_Properties, sizeof(output_properties), output_properties },
 	};
@@ -69,40 +63,42 @@ static void test_copy(uint32_t version)
 				.maxsize = sizeof(output_bytes), .chunk = &output_chunks[1] },
 	};
 	struct spa_buffer input = {
-		.n_metas = 4, .metas = input_metas,
+		.n_metas = 3, .metas = input_metas,
 		.n_datas = 2, .datas = input_data,
 	};
 	struct spa_buffer output = {
-		.n_metas = 4, .metas = output_metas,
+		.n_metas = 3, .metas = output_metas,
 		.n_datas = 2, .datas = output_data,
 	};
 	uint32_t i;
 
-	CHECK(spa_meta_properties_init(&input_metas[2]));
-	CHECK(spa_meta_properties_add(&input_metas[2], 1, SPA_TYPE_Id, sizeof(optical), &optical));
-	CHECK(spa_meta_properties_add(&input_metas[2], SPA_META_PROPERTY_triggerClassification,
-			SPA_TYPE_Id, sizeof(trigger), &trigger));
-	CHECK(spa_meta_properties_add(&input_metas[2], 17, SPA_TYPE_Bytes, 3, "abc"));
-	CHECK(spa_meta_acquisition_init(&input_acquisition));
-	if (version == SPA_META_ACQUISITION_VERSION_3)
-		CHECK(spa_meta_acquisition_set_trigger_classification(&input_acquisition,
-				SPA_META_ACQUISITION_TRIGGER_HIGH));
-	CHECK(input_acquisition.version == version);
-	CHECK(spa_meta_acquisition_set_identity(&input_acquisition,
-			domain, 7, 91));
-	CHECK(spa_meta_acquisition_set_exposure_start_ptp(&input_acquisition,
-			123456, 9, grandmaster, 3));
+	CHECK(spa_meta_properties_init(&input_metas[1]));
+	CHECK(spa_meta_properties_add(&input_metas[1], 1, 0, SPA_TYPE_Id, sizeof(optical), &optical));
+	CHECK(spa_meta_properties_add(&input_metas[1], SPA_META_PROPERTY_triggerClassification,
+			0, SPA_TYPE_Id, sizeof(trigger), &trigger));
+	{
+		uint32_t flags = SPA_POD_PROP_FLAG_MANDATORY, timebase = SPA_EXPOSURE_TIMEBASE_TAI, ptp_domain = 3;
+		int64_t start = 123456;
+		CHECK(spa_meta_properties_add(&input_metas[1], 3, flags, SPA_TYPE_Bytes, 16, domain));
+		CHECK(spa_meta_properties_add_uint64(&input_metas[1], 4, flags, UINT64_MAX));
+		CHECK(spa_meta_properties_add_uint64(&input_metas[1], 5, flags, UINT64_MAX));
+		CHECK(spa_meta_properties_add_uint64(&input_metas[1], 6, flags, UINT64_MAX));
+		CHECK(spa_meta_properties_add(&input_metas[1], 7, flags, SPA_TYPE_Long, 8, &start));
+		CHECK(spa_meta_properties_add(&input_metas[1], 8, flags, SPA_TYPE_Id, 4, &timebase));
+		CHECK(spa_meta_properties_add_uint64(&input_metas[1], 9, flags, UINT64_MAX));
+		CHECK(spa_meta_properties_add(&input_metas[1], 10, flags, SPA_TYPE_Bytes, 8, grandmaster));
+		CHECK(spa_meta_properties_add(&input_metas[1], 11, flags, SPA_TYPE_Id, 4, &ptp_domain));
+	}
+	CHECK(spa_meta_properties_add(&input_metas[1], 17, 0, SPA_TYPE_Bytes, 3, "abc"));
 	for (i = 0; i < sizeof(input_bytes); i++)
 		input_bytes[i] = (uint8_t)(i + 1u);
 	memset(output_bytes, 0xa5, sizeof(output_bytes));
 	CHECK(pwao_queue_buffer_transfer(&input, &output, true) == 0);
 	CHECK(memcmp(&input_header, &output_header, sizeof(input_header)) == 0);
-	CHECK(memcmp(&input_acquisition, &output_acquisition,
-			sizeof(input_acquisition)) == 0);
 	CHECK(output_busy.count == 3);
 	CHECK(memcmp(input_properties, output_properties, sizeof(input_properties)) == 0);
-	CHECK(spa_meta_properties_find(&output_metas[3], SPA_META_PROPERTY_triggerClassification) != NULL);
-	CHECK(spa_meta_properties_acquisition_is_consistent(&output_metas[3], &output_metas[1]));
+	CHECK(spa_meta_properties_find(&output_metas[2], SPA_META_PROPERTY_triggerClassification) != NULL);
+	CHECK(spa_meta_properties_is_valid(&output_metas[2], NULL, 0));
 	CHECK(memcmp(&input_chunks, &output_chunks, sizeof(input_chunks)) == 0);
 	CHECK(memcmp(&input_bytes[3], &output_bytes[3], 7) == 0);
 	CHECK(memcmp(&input_bytes[14], &output_bytes[14], 5) == 0);
@@ -110,14 +106,14 @@ static void test_copy(uint32_t version)
 			output_bytes[19] == 0xa5);
 	/* Busy belongs to the output endpoint and need not be present in the
 	 * producer's buffer layout. */
-	input.n_metas = 3;
+	input.n_metas = 2;
 	output_busy.count = 5;
 	CHECK(pwao_queue_buffer_transfer(&input, &output, true) == 0);
 	CHECK(output_busy.count == 5);
 	input_bytes[3] ^= 0xffu;
 	CHECK(input_bytes[3] != output_bytes[3]);
 	/* A consumer may negotiate only Header even when the producer also
-	 * supplies Acquisition metadata. */
+	 * supplies Properties metadata. */
 	output.n_metas = 1;
 	output.metas = &output_header_only;
 	output_header.seq = 0;
@@ -198,8 +194,7 @@ static void test_lease(void)
 
 int main(void)
 {
-	test_copy(SPA_META_ACQUISITION_VERSION_2);
-	test_copy(SPA_META_ACQUISITION_VERSION_3);
+	test_copy();
 	test_lease();
 	return 0;
 }

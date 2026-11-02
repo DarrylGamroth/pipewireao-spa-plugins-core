@@ -37,12 +37,12 @@ if get_option('tests').allowed()
   )
   test('pipewireao-queue-state', queue_state_test)
 
-  queue_acquisition_test = executable(
-    'pipewireao-queue-acquisition-test',
-    'test-acquisition.c',
+  queue_properties_test = executable(
+    'pipewireao-queue-properties-test',
+    'test-properties.c',
     dependencies: spa_dep,
   )
-  test('pipewireao-queue-acquisition', queue_acquisition_test)
+  test('pipewireao-queue-properties', queue_properties_test)
 
   queue_buffer_test = executable(
     'pipewireao-queue-buffer-test',
@@ -97,7 +97,8 @@ if get_option('tests').allowed()
 
   pipewire_daemon = find_program(
     pipewire_pkg_dep.get_variable(pkgconfig: 'prefix') / 'bin' / 'pipewire-ao',
-    pipewire_pkg_dep.get_variable(pkgconfig: 'confdatadir') / 'pipewire-ao',
+    pipewire_pkg_dep.get_variable(pkgconfig: 'confdatadir',
+      default_value: pipewire_pkg_dep.get_variable(pkgconfig: 'prefix') / 'share' / 'pipewire-ao') / 'pipewire-ao',
     required: false,
   )
   shell = find_program('sh')
@@ -105,37 +106,35 @@ if get_option('tests').allowed()
     'LD_LIBRARY_PATH', pipewire_pkg_dep.get_variable(pkgconfig: 'libdir'),
   )
   if pipewire_daemon.found()
-    queue_remote_acquisition_test = executable(
-      'pipewireao-queue-remote-acquisition-test',
-      'test-remote-acquisition.c',
+    queue_remote_properties_test = executable(
+      'pipewireao-queue-remote-properties-test',
+      'test-remote-properties.c',
       dependencies: [spa_dep, pipewire_dep],
     )
     foreach name, options : {
-      'pipewireao-queue-remote-acquisition': [],
-      'pipewireao-queue-remote-buffer-properties': ['--acquisition-v3', '--buffer-properties'],
-      'pipewireao-queue-remote-buffer-properties-queue-only': ['--acquisition-v3', '--queue-only', '--buffer-properties'],
-      'pipewireao-queue-remote-buffer-properties-lease': ['--lease', '--acquisition-v3', '--queue-only', '--buffer-properties'],
-      'pipewireao-queue-remote-acquisition-v3': ['--acquisition-v3'],
-      'pipewireao-queue-remote-acquisition-v3-queue-only': ['--acquisition-v3', '--queue-only'],
-      'pipewireao-queue-remote-acquisition-header': ['--header-only'],
-      'pipewireao-queue-remote-acquisition-pause': ['--pause'],
-      'pipewireao-queue-remote-acquisition-shared-loop': ['--same-loop'],
-      'pipewireao-queue-remote-video-acquisition': ['--video', '--queue-only'],
+      'pipewireao-queue-remote-properties': [],
+      'pipewireao-queue-remote-buffer-properties': ['--buffer-properties'],
+      'pipewireao-queue-remote-buffer-properties-queue-only': ['--queue-only', '--buffer-properties'],
+      'pipewireao-queue-remote-buffer-properties-lease': ['--lease', '--queue-only', '--buffer-properties'],
+      'pipewireao-queue-remote-properties-header': ['--header-only'],
+      'pipewireao-queue-remote-properties-pause': ['--pause'],
+      'pipewireao-queue-remote-properties-shared-loop': ['--same-loop'],
+      'pipewireao-queue-remote-video-properties': ['--video', '--queue-only'],
       'pipewireao-queue-remote-video-header': ['--video', '--queue-only', '--header-only'],
-      'pipewireao-queue-remote-video-lease-acquisition': ['--lease', '--video', '--queue-only'],
+      'pipewireao-queue-remote-video-lease-properties': ['--lease', '--video', '--queue-only'],
       'pipewireao-queue-remote-video-lease-header': ['--lease', '--video', '--queue-only', '--header-only'],
     }
       test(
         name,
         shell,
         args: [
-          files('test-remote-acquisition.sh'),
-          queue_remote_acquisition_test.full_path(),
+          files('test-remote-properties.sh'),
+          queue_remote_properties_test.full_path(),
           pipewire_daemon.full_path(),
-          meson.current_source_dir() / 'test-remote-acquisition.conf',
+          meson.current_source_dir() / 'test-remote-properties.conf',
           meson.current_build_dir(),
         ] + options,
-        depends: [queue_module, queue_remote_acquisition_test],
+        depends: [queue_module, queue_remote_properties_test],
         env: queue_module_test_env,
         timeout: 25,
       )
