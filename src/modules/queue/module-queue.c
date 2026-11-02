@@ -1522,7 +1522,7 @@ static int update_capture_params(struct impl *impl)
 			SPA_TYPE_OBJECT_ParamMeta, SPA_PARAM_Meta);
 	spa_pod_builder_add(&builder,
 			SPA_PARAM_META_type, SPA_POD_Id(SPA_META_Properties),
-			SPA_PARAM_META_size, SPA_POD_CHOICE_RANGE_Int(SPA_META_PROPERTIES_MAX_SIZE,
+			SPA_PARAM_META_size, SPA_POD_CHOICE_RANGE_Int(512,
 				SPA_META_PROPERTIES_MIN_SIZE, SPA_META_PROPERTIES_MAX_SIZE), 0);
 	spa_pod_builder_prop(&builder, SPA_PARAM_META_features, SPA_POD_PROP_FLAG_MANDATORY);
 	spa_pod_builder_int(&builder, SPA_META_FEATURE_PROPERTIES_VERSION_1);
@@ -1739,7 +1739,7 @@ static int setup_playback_endpoint(struct impl *impl)
 	spa_pod_builder_push_object(&builder, &frame, SPA_TYPE_OBJECT_ParamMeta, SPA_PARAM_Meta);
 	spa_pod_builder_add(&builder,
 			SPA_PARAM_META_type, SPA_POD_Id(SPA_META_Properties),
-			SPA_PARAM_META_size, SPA_POD_CHOICE_RANGE_Int(SPA_META_PROPERTIES_MAX_SIZE,
+			SPA_PARAM_META_size, SPA_POD_CHOICE_RANGE_Int(512,
 				SPA_META_PROPERTIES_MIN_SIZE, SPA_META_PROPERTIES_MAX_SIZE), 0);
 	spa_pod_builder_prop(&builder, SPA_PARAM_META_features, SPA_POD_PROP_FLAG_MANDATORY);
 	spa_pod_builder_int(&builder, SPA_META_FEATURE_PROPERTIES_VERSION_1);

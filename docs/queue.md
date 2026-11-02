@@ -295,7 +295,8 @@ Verification intent (informative): multi-block payload, Header, Properties,
 chunk, and sequence-gap tests in both storage modes.
 
 Capture advertises `SPA_META_Properties` (ID 13), schema feature Version 1 and a
-16–4096-byte capacity range. Acquisition identity, exposure and clock facts,
+16–4096-byte capacity range with a 512-byte default. Acquisition identity,
+exposure and clock facts,
 optical classification and electrical trigger classification use independent
 typed keys in this object; retired Acquisition metadata IDs are not negotiated.
 Playback advertises that capability
@@ -653,6 +654,12 @@ private-core Properties fixtures. All four tests pass, preserving electrical
 trigger classification alongside independent optical classification and
 Acquisition v3. The generic transfer implementation remains unchanged.
 
+The prior 1.7.3 release integration started from main `2adeb50` and retained
+its raw-video copy/lease, graph-label, lifecycle and registry coverage. All 23
+queue selectors passed against native `15525f80f`; the extra selectors exercised
+retired Acquisition versions and do not describe the current Properties-only
+transport.
+
 These are CPU/native-protocol checks. They do not qualify devices, optical
 classification accuracy, GPU execution or callback deadlines.
 
@@ -663,3 +670,14 @@ with Header plus typed Properties. All 17 focused local and private-core queue
 tests pass, including complete identity, duration and clock groups, independent
 optical/electrical facts, unknown optional field preservation, pool reuse, copy
 and lease handling. These checks establish software transport behavior only.
+
+The migration integrates upstream main `d7ca0b4` while retaining video copy/lease,
+graph-label, lifecycle and registry behavior. The native minimum is now 2.0.0;
+capture and initial playback offer a 512-byte Properties default and retain the
+16–4096-byte range. All 18 queue selectors passed after integration against
+native `55e80a78a`, using private cores for remote fixtures, with no skips or
+timeouts. The 27 Rust plugin workspace tests and formatting checks also passed
+against Rust core `5a7df70` and the same SDK. The Rust validation used a temporary
+sibling path override, restored before committing. The only Rust build warning
+was the existing native `spa_pod_compare_is_step_of` unused `size` parameter.
+No device or deadline qualification is implied.

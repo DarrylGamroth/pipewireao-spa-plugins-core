@@ -1,5 +1,44 @@
 # Remote COPY queue Acquisition qualification
 
+## Queue integration — 2026-10-30
+
+The integration combines local main `9848698` with GitHub main `8191ef5` in
+branch `codex/queue-acquisition-integration-20261030`. It retains raw-video
+Acquisition advertisement and generic graph presentation metadata while adding
+the negotiated V2/V3 support. Both raw video and ndarray capture advertise V2/V3
+capabilities; playback advertises only the version selected in the capture pool.
+Header-only producers remain supported. Invalid version markers remain rejected.
+
+The merge adds remote V3 tests for raw-video copy and lease queues and ndarray
+lease queues. The existing oracle checks payload, Header, Acquisition identity
+and timing, and alternating V3 trigger classification. The added raw-video V3
+copy case failed with V2-only capture negotiation (12.17 seconds), then passed
+with the merged negotiation. The complete queue suite passed **20/20**, with no
+skips or timeouts. Generic queue title, class, grouping identity and endpoint role
+checks are included in the module and remote registry tests. Independent source
+review found no remaining confirmed defects or lost changes.
+
+Validation used GCC 14.2.0 and the task-local PipeWireAO control-1.7.2-sdk-r2
+under `adaptive-optics-simulations-cal2-amdgpu/build/cal2-delivery-20261028/native/`.
+Commands from the integration worktree:
+
+```sh
+export PKG_CONFIG_PATH="$SDK/lib/pkgconfig"
+meson setup "$EVIDENCE/build" -Dtests=enabled -Dfits=disabled
+meson test -C "$EVIDENCE/build" 'pipewireao-queue-*' --num-processes 2 --print-errorlogs
+```
+
+`SDK` is the SDK directory above; `EVIDENCE` is
+`/home/dgamroth/.cache/pipewireao/queue-integration-20261030`. Before/after logs,
+Meson test details and build outputs are retained there. Source checks include
+`git diff --check` and shell syntax validation. The temporary V2-only diagnostic
+build warned about its unused choice frame; the final merged queue rebuilt
+without that warning. Unrelated Rust-plugin builds reported an existing SDK
+header unused-parameter warning. These are software transport checks, not
+camera, hardware, throughput or real-time qualification. No installed SDK,
+plugin, live session or simulation configuration was changed.
+
+
 ## Scope and identities
 
 This is a bounded native software transport investigation, QRA001. The baseline
