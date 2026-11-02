@@ -57,7 +57,8 @@ because pyRTC records an absolute realtime timestamp rather than the active
 PipeWire graph clock.
 
 Source buffers require Header and version-1 BufferProperties, with a 512-byte
-Properties default. Each publication clears that Object to valid empty metadata:
+Properties default and a 4064-byte maximum, reserving the Header's 32 bytes in
+the 4096-byte metadata budget. Each publication clears that Object to valid empty metadata:
 the pyRTC ABI supplies no physical acquisition identity, exposure, electrical or
 optical facts. The bridge does not manufacture them from its write counter or
 realtime timestamp.

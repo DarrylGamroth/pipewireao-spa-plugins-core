@@ -35,7 +35,7 @@ struct test_buffer {
 	struct spa_chunk chunk;
 	struct spa_meta metas[2];
 	struct spa_meta_header header;
-	uint64_t properties[64];
+	uint64_t properties[512];
 	uint16_t samples[SAMPLE_COUNT];
 };
 
@@ -124,7 +124,7 @@ static void init_buffer(struct test_buffer *storage, bool output)
 			SPA_META_Header, sizeof(storage->header), &storage->header,
 		};
 		storage->metas[1] = (struct spa_meta) {
-			SPA_META_Properties, sizeof(storage->properties), storage->properties,
+			SPA_META_Properties, 512, storage->properties,
 		};
 		storage->buffer.n_metas = SPA_N_ELEMENTS(storage->metas);
 		storage->buffer.metas = storage->metas;
@@ -210,6 +210,8 @@ static void metadata_result(void *data, int seq SPA_UNUSED, int res,
 		spa_assert_se(capacity != NULL && capacity->value.type == SPA_TYPE_Choice);
 		spa_assert_se(SPA_POD_CHOICE_VALUE_TYPE(&capacity->value) == SPA_TYPE_Int);
 		spa_assert_se(*(const int32_t *)SPA_POD_CHOICE_VALUES(&capacity->value) == 512);
+		spa_assert_se(((const int32_t *)SPA_POD_CHOICE_VALUES(&capacity->value))[2] ==
+				4096 - sizeof(struct spa_meta_header));
 		spa_assert_se(features != NULL && features->flags == SPA_POD_PROP_FLAG_MANDATORY);
 		spa_assert_se(spa_pod_get_int(&features->value, &version) == 0 &&
 				version == SPA_META_FEATURE_PROPERTIES_VERSION_1);
@@ -251,6 +253,14 @@ static void configure_buffers(struct spa_node *node,
 		spa_assert_se(spa_node_port_use_buffers(node, direction, 0, 0,
 				buffers, 2) == -EINVAL);
 		storage[1].buffer.n_metas = SPA_N_ELEMENTS(storage[1].metas);
+		storage[1].metas[1].size = 4072;
+		spa_assert_se(spa_node_port_use_buffers(node, direction, 0, 0,
+				buffers, 2) == -EINVAL);
+		storage[1].metas[1].size = 4096;
+		spa_assert_se(spa_node_port_use_buffers(node, direction, 0, 0,
+				buffers, 2) == -EINVAL);
+		for (i = 0; i < 2; i++)
+			storage[i].metas[1].size = 4064;
 	}
 	spa_assert_se(spa_node_port_use_buffers(node, direction, 0, 0,
 			buffers, 2) == 0);

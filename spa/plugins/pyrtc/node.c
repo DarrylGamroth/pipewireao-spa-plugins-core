@@ -35,6 +35,7 @@
 
 #define MIN_BUFFERS 2u
 #define MAX_BUFFERS 64u
+#define MAX_PROPERTIES_SIZE (SPA_META_PROPERTIES_MAX_SIZE - sizeof(struct spa_meta_header))
 #define TEXT_SIZE 256u
 #define NODE_TEXT_SIZE (TEXT_SIZE + 32u)
 
@@ -279,7 +280,7 @@ static int build_port_param(struct impl *self, uint32_t id, uint32_t index,
 			spa_pod_builder_add(builder,
 					SPA_PARAM_META_type, SPA_POD_Id(SPA_META_Properties),
 					SPA_PARAM_META_size, SPA_POD_CHOICE_RANGE_Int(512,
-						SPA_META_PROPERTIES_MIN_SIZE, SPA_META_PROPERTIES_MAX_SIZE), 0);
+						SPA_META_PROPERTIES_MIN_SIZE, MAX_PROPERTIES_SIZE), 0);
 			spa_pod_builder_prop(builder, SPA_PARAM_META_features,
 					SPA_POD_PROP_FLAG_MANDATORY);
 			spa_pod_builder_int(builder, SPA_META_FEATURE_PROPERTIES_VERSION_1);
@@ -454,6 +455,7 @@ static int port_use_buffers(void *object, enum spa_direction direction,
 		return -EINVAL;
 	for (i = 0; i < n_buffers; i++) {
 		struct spa_data *data;
+		struct spa_meta *properties;
 
 		if (buffers[i] == NULL || buffers[i]->n_datas != 1 ||
 				(data = &buffers[i]->datas[0])->data == NULL ||
@@ -462,7 +464,9 @@ static int port_use_buffers(void *object, enum spa_direction direction,
 				(self->direction == SPA_DIRECTION_OUTPUT &&
 				 (spa_buffer_find_meta_data(buffers[i], SPA_META_Header,
 						sizeof(struct spa_meta_header)) == NULL ||
-				  !spa_meta_properties_init(spa_buffer_find_meta(buffers[i], SPA_META_Properties)))))
+				  (properties = spa_buffer_find_meta(buffers[i], SPA_META_Properties)) == NULL ||
+				  properties->size > MAX_PROPERTIES_SIZE ||
+				  !spa_meta_properties_init(properties))))
 			return -EINVAL;
 	}
 	for (i = 0; i < n_buffers; i++) {
