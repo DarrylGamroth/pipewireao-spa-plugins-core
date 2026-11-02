@@ -16,7 +16,7 @@ publish = false
 [workspace.dependencies]
 cc = "1.4.4"
 libc = "0.2.189"
-libspa = { package = "libspa-ao", path = "../pipewire-rs/libspa", features = ["v1_2_0"] }
+libspa = { package = "libspa-ao", git = "https://github.com/DarrylGamroth/PipeWireAO-rs.git", rev = "b2f7a067fcb995a31d38e6c845d773a314fea4e0", features = ["v1_2_0"] }
 pkg-config = "0.3.34"
 
 [workspace.lints.rust]

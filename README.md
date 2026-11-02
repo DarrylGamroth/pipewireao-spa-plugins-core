@@ -16,8 +16,9 @@ need their own GitHub repository.
 
 ## Build and stage
 
-The build requires PipeWireAO 2.0.0 or later, Meson, Ninja, Cargo, Rust, and a
-sibling `pipewire-rs` checkout used by the Rust workspace.
+The build requires PipeWireAO 3.0.0 or later, Meson, Ninja, Cargo, and Rust.
+The Rust workspace pins its PipeWireAO bindings to an immutable Git revision;
+Cargo fetches that revision or uses its local cache.
 
 ```console
 meson setup build --prefix=/usr
@@ -49,7 +50,7 @@ The corresponding `debian-13-package` and `ubuntu-26-04-package` targets export
 packages internally, but a Meson staged install is equally valid for another
 deployment system.
 
-The container build expects the sibling `pipewire-rs` build context and an
+The container build requires access to the pinned Rust bindings and an
 authorized source for the PipeWireAO build/runtime dependencies. BuildKit
 secrets `apt_sources`, `apt_auth`, and `apt_keyring` can provide private package
 sources without adding credentials to the image or repository.

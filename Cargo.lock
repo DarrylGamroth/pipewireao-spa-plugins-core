@@ -196,6 +196,7 @@ dependencies = [
 [[package]]
 name = "libspa-ao"
 version = "0.10.1"
+source = "git+https://github.com/DarrylGamroth/PipeWireAO-rs.git?rev=b2f7a067fcb995a31d38e6c845d773a314fea4e0#b2f7a067fcb995a31d38e6c845d773a314fea4e0"
 dependencies = [
  "bitflags",
  "cc",
@@ -210,6 +211,7 @@ dependencies = [
 [[package]]
 name = "libspa-ao-sys"
 version = "0.10.1"
+source = "git+https://github.com/DarrylGamroth/PipeWireAO-rs.git?rev=b2f7a067fcb995a31d38e6c845d773a314fea4e0#b2f7a067fcb995a31d38e6c845d773a314fea4e0"
 dependencies = [
  "bindgen",
  "cc",

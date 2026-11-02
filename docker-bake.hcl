@@ -15,9 +15,6 @@ target "package-common" {
   context    = "."
   dockerfile = "packaging/containers/Dockerfile.package"
   target     = "packages"
-  contexts = {
-    pipewire-rs = "../pipewire-rs"
-  }
   args = {
     APT_BUILD_PACKAGES = APT_BUILD_PACKAGES
     COMPONENT          = COMPONENT

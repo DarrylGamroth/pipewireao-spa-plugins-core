@@ -338,14 +338,6 @@ def main() -> None:
     source_root = args.source_root.resolve()
     if not (source_root / "meson.build").is_file():
         raise SystemExit(f"source root does not contain meson.build: {source_root}")
-    if component.get("requires_pipewire_rs") and not (
-        source_root.parent / "pipewire-rs" / "libspa" / "Cargo.toml"
-    ).is_file():
-        raise SystemExit(
-            "the adjacent pipewire-rs checkout is missing; expected "
-            f"{source_root.parent / 'pipewire-rs' / 'libspa' / 'Cargo.toml'}"
-        )
-
     with tempfile.TemporaryDirectory(prefix=f"pwao-deb-{args.component}-") as temporary:
         workspace = Path(temporary)
         build_dir = workspace / "build"
