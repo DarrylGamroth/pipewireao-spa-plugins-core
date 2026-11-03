@@ -16,7 +16,7 @@ need their own GitHub repository.
 
 ## Build and stage
 
-The build requires PipeWireAO 3.0.0 or later, Meson, Ninja, Cargo, and Rust.
+The build requires the PipeWireAO 4.x metadata ABI, Meson, Ninja, Cargo, and Rust.
 The Rust workspace pins its PipeWireAO bindings to an immutable Git revision;
 Cargo fetches that revision or uses its local cache.
 

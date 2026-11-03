@@ -13,7 +13,10 @@ int main(void)
     CHECK(pwao_metadata_parse(&metadata, "[{type=1022 size=8 required=true}]") == 0);
     CHECK(metadata.count == 2 && metadata.records[1].type == 1022 && metadata.records[1].flags == SPA_META_REQUIREMENT_REQUIRED);
     CHECK(pwao_metadata_parse(&metadata, "[{type=1 size=32 required=true}]") == 0 && metadata.count == 1);
+    CHECK(pwao_metadata_parse(&metadata, "[{type=769 size=24 required=false},{type=773 size=24 required=false}]") == 0);
     const char *invalid[] = {
+        "[{type=769 size=64 required=false}]", "[{type=770 size=336 required=false}]",
+        "[{type=773 size=32 required=false}]",
         "[", "{}", "[] true", "[1]", "[{type=1022 size=8}]", "[{type=1022 size=8 required=1}]",
         "[{type=1022 size=8 required=true unknown=0}]", "[{type=1022 type=1023 size=8 required=true}]",
         "[{type=1022 size=8 required=true},{type=1022 size=8 required=false}]",

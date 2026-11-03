@@ -36,6 +36,14 @@
 	} \
 } while (0)
 
+static const uint32_t metadata_types[] = {
+    SPA_META_AcquisitionIdentity,
+    SPA_META_ExposureTiming,
+    SPA_META_ReferenceTimestamp,
+    SPA_META_OpticalChopping,
+    SPA_META_ElectricalTrigger,
+};
+
 struct test_data;
 
 struct receipt {
@@ -328,8 +336,8 @@ static void producer_process(void *user_data)
     if (producer->test->header_only) {
         goto publish;
     }
-	for (uint32_t type = SPA_META_AcquisitionIdentity; type <= SPA_META_ElectricalTrigger; type++) {
-		struct spa_meta *slot = spa_buffer_find_meta(buffer, type);
+	for (uint32_t index = 0; index < SPA_N_ELEMENTS(metadata_types); index++) {
+		struct spa_meta *slot = spa_buffer_find_meta(buffer, metadata_types[index]);
 		if (slot == NULL || !spa_meta_record_init(slot)) goto error;
 	}
 	struct spa_meta_acquisition_identity *identity = spa_buffer_find_meta_data(buffer, SPA_META_AcquisitionIdentity, sizeof(*identity));
@@ -337,13 +345,13 @@ static void producer_process(void *user_data)
 		.domain = { 0xa0 }, .generation = UINT64_MAX, .sequence = sequence };
 	struct spa_meta_exposure_timing *timing = spa_buffer_find_meta_data(buffer, SPA_META_ExposureTiming, sizeof(*timing));
 	*timing = (struct spa_meta_exposure_timing) { .flags = SPA_META_EXPOSURE_START_VALID | SPA_META_EXPOSURE_DURATION_VALID,
-		.clock = SPA_META_CLOCK_MODEL, .clock_domain = { 0xa0 }, .start_nsec = header->pts, .duration_nsec = 2000000 };
-	struct spa_meta_absolute_time *absolute = spa_buffer_find_meta_data(buffer, SPA_META_AbsoluteTime, sizeof(*absolute));
-	absolute->count = 1;
-	absolute->events[0] = (struct spa_meta_absolute_time_event) { .seconds = INT64_MAX - 3,
-		.nanoseconds = sequence, .clock = sequence % 2 ? SPA_META_CLOCK_REALTIME : SPA_META_CLOCK_TAI,
-		.event = SPA_META_TIME_EVENT_ACQUISITION, .flags = SPA_META_RECORD_VALID | SPA_META_RECORD_MAPPED,
-		.origin = { 0xa0 }, .clock_domain = { 0xb0 }, .mapping = { 0xc0 } };
+		.clock = SPA_META_CLOCK_MODEL, .start_nsec = header->pts, .duration_nsec = 2000000 };
+    struct spa_meta_reference_timestamp *reference = spa_buffer_find_meta_data(buffer, SPA_META_ReferenceTimestamp, sizeof(*reference));
+    *reference = (struct spa_meta_reference_timestamp) {
+        .clock = sequence % 2 ? SPA_META_CLOCK_REALTIME : SPA_META_CLOCK_TAI,
+        .timestamp_nsec = UINT64_MAX - sequence,
+        .duration_nsec = UINT64_MAX,
+    };
 	if (producer->test->metadata_records) {
 		struct spa_meta_optical_chopping *optical = spa_buffer_find_meta_data(buffer, SPA_META_OpticalChopping, sizeof(*optical));
 		struct spa_meta_electrical_trigger *trigger = spa_buffer_find_meta_data(buffer, SPA_META_ElectricalTrigger, sizeof(*trigger));
@@ -400,18 +408,19 @@ static bool validate_observer_buffer(struct endpoint *observer,
             spa_buffer_find_meta(buffer, SPA_META_AcquisitionIdentity) == NULL;
     }
     if (observer->test->header_only) {
-        return true;
+        for (uint32_t index = 0; index < SPA_N_ELEMENTS(metadata_types); index++)
+            if (spa_buffer_find_meta(buffer, metadata_types[index]) != NULL) return false;
+        return spa_meta_records_validate(buffer->metas, buffer->n_metas, NULL, 0);
     }
 	if (!spa_meta_records_validate(buffer->metas, buffer->n_metas, NULL, 0)) return false;
 	const struct spa_meta_acquisition_identity *identity = spa_buffer_find_meta_data(buffer, SPA_META_AcquisitionIdentity, sizeof(*identity));
 	const struct spa_meta_exposure_timing *timing = spa_buffer_find_meta_data(buffer, SPA_META_ExposureTiming, sizeof(*timing));
-	const struct spa_meta_absolute_time *absolute = spa_buffer_find_meta_data(buffer, SPA_META_AbsoluteTime, sizeof(*absolute));
-	if (identity == NULL || identity->flags != SPA_META_RECORD_VALID || identity->domain[0] != 0xa0 ||
-		identity->generation != UINT64_MAX || identity->sequence != *sequence ||
-		timing == NULL || timing->start_nsec != header->pts || timing->duration_nsec != 2000000 || timing->clock != SPA_META_CLOCK_MODEL ||
-		absolute == NULL || absolute->count != 1 || absolute->events[0].seconds != INT64_MAX - 3 ||
-		absolute->events[0].nanoseconds != *sequence || absolute->events[0].clock != (*sequence % 2 ? SPA_META_CLOCK_REALTIME : SPA_META_CLOCK_TAI) ||
-		absolute->events[0].event != SPA_META_TIME_EVENT_ACQUISITION || absolute->events[0].mapping[0] != 0xc0) return false;
+    const struct spa_meta_reference_timestamp *reference = spa_buffer_find_meta_data(buffer, SPA_META_ReferenceTimestamp, sizeof(*reference));
+    if (identity == NULL || identity->flags != SPA_META_RECORD_VALID || identity->domain[0] != 0xa0 ||
+        identity->generation != UINT64_MAX || identity->sequence != *sequence ||
+        timing == NULL || timing->start_nsec != header->pts || timing->duration_nsec != 2000000 || timing->clock != SPA_META_CLOCK_MODEL ||
+        reference == NULL || reference->reserved != 0 || reference->timestamp_nsec != UINT64_MAX - *sequence ||
+        reference->duration_nsec != UINT64_MAX || reference->clock != (*sequence % 2 ? SPA_META_CLOCK_REALTIME : SPA_META_CLOCK_TAI)) return false;
 	if (observer->test->metadata_records) {
 		const struct spa_meta_optical_chopping *optical = spa_buffer_find_meta_data(buffer, SPA_META_OpticalChopping, sizeof(*optical));
 		const struct spa_meta_electrical_trigger *trigger = spa_buffer_find_meta_data(buffer, SPA_META_ElectricalTrigger, sizeof(*trigger));
@@ -540,11 +549,16 @@ static void endpoint_param_changed(void *user_data, uint32_t id, const struct sp
             params[count++] = spa_pod_builder_add_object(&builder, SPA_TYPE_OBJECT_ParamMeta, SPA_PARAM_Meta,
                 SPA_PARAM_META_type, SPA_POD_Id(0x3fe), SPA_PARAM_META_size, SPA_POD_Int(8),
                 SPA_PARAM_META_required, SPA_POD_Bool(true));
-    } else if (!endpoint->test->header_only)
-		for (uint32_t type = SPA_META_AcquisitionIdentity; type <= SPA_META_ElectricalTrigger; type++)
-			params[count++] = spa_pod_builder_add_object(&builder, SPA_TYPE_OBJECT_ParamMeta, SPA_PARAM_Meta,
-				SPA_PARAM_META_type, SPA_POD_Id(type), SPA_PARAM_META_size, SPA_POD_Int(spa_meta_record_size(type)),
-				SPA_PARAM_META_required, SPA_POD_Bool(type <= SPA_META_AbsoluteTime || endpoint->test->metadata_records));
+    } else if (!endpoint->test->header_only) {
+        for (uint32_t index = 0; index < SPA_N_ELEMENTS(metadata_types); index++) {
+            uint32_t type = metadata_types[index];
+            bool required = type == SPA_META_AcquisitionIdentity || type == SPA_META_ExposureTiming ||
+                type == SPA_META_ReferenceTimestamp || endpoint->test->metadata_records;
+            params[count++] = spa_pod_builder_add_object(&builder, SPA_TYPE_OBJECT_ParamMeta, SPA_PARAM_Meta,
+                SPA_PARAM_META_type, SPA_POD_Id(type), SPA_PARAM_META_size, SPA_POD_Int(spa_meta_record_size(type)),
+                SPA_PARAM_META_required, SPA_POD_Bool(required));
+        }
+    }
 	CHECK(pw_stream_update_params(endpoint->stream, params, count) == 0);
 }
 

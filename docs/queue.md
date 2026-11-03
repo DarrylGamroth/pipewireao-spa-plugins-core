@@ -321,7 +321,10 @@ Busy, SyncTimeline and zero-size feature entries remain transport-owned and link
 output records. Optical chopping and electrical trigger classification remain
 independent; neither classification is derived from the other. Consumers validate
 their required facts on each input, independently of allocation negotiation.
-Retired metadata IDs 11, 12 and 13 are unsupported.
+The native 4.x profile uses 24-byte ExposureTiming and ReferenceTimestamp
+(type 0x305) records. Reference timestamps retain unsigned integer nanoseconds;
+UINT64_MAX is the unspecified-duration sentinel. Retired metadata IDs 11, 12,
+13 and 0x302, and the former 64-byte ExposureTiming layout, are unsupported.
 
 ### QUEUE-007 — Lifecycle and lease recovery
 
