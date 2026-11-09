@@ -40,6 +40,11 @@ cxx = meson.get_compiler('cpp')
 dl_dep = cc.find_library('dl', required: false)
 m_dep = cc.find_library('m')
 threads_dep = dependency('threads')
+if get_option('queue-only')
+  subdir('src/modules/queue')
+  subdir_done()
+endif
+
 drm_dep = dependency('libdrm', required: false)
 if fs.is_dir('include/pipewireao-plugins')
   install_headers(

@@ -36,6 +36,10 @@ See [`docs/queue.md`](docs/queue.md) for the queue module and
 [`spa/plugins/pyrtc/README.md`](spa/plugins/pyrtc/README.md) for the pyRTC
 bridge.
 
+Use `-Dqueue-only=true` when packaging the queue separately. This selection
+uses the installed PipeWireAO SDK and builds the C module without Cargo or
+the SPA plugins.
+
 ## Container and package recipes
 
 `docker-bake.hcl` provides `debian-13-deploy` and

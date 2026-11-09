@@ -1,4 +1,11 @@
 option(
+  'queue-only',
+  type: 'boolean',
+  value: false,
+  description: 'Build and install only the PipeWire queue module',
+)
+
+option(
   'alpao-sdk',
   type: 'feature',
   value: 'disabled',
