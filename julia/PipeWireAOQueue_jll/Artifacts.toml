@@ -1,0 +1,18 @@
+[[PipeWireAOQueue]]
+arch = "aarch64"
+git-tree-sha1 = "0643723ec318bf8ed83feda4d6e713ba3f570a5c"
+libc = "glibc"
+os = "linux"
+
+    [[PipeWireAOQueue.download]]
+    sha256 = "082c7b0deb335b677561705c023e0d32046137896b33f9853f5723cf3023299e"
+    url = "https://github.com/DarrylGamroth/pipewireao-spa-plugins-core/releases/download/PipeWireAOQueue-v0.1.0+0/PipeWireAOQueue.v0.1.0.aarch64-linux-gnu.tar.gz"
+[[PipeWireAOQueue]]
+arch = "x86_64"
+git-tree-sha1 = "20afa07132938ae663c7cf4c10f00172ca40e70f"
+libc = "glibc"
+os = "linux"
+
+    [[PipeWireAOQueue.download]]
+    sha256 = "df0190fd2c25e46b5e316a3e04a992bf444d9de726430e0357fa980a7faebc4e"
+    url = "https://github.com/DarrylGamroth/pipewireao-spa-plugins-core/releases/download/PipeWireAOQueue-v0.1.0+0/PipeWireAOQueue.v0.1.0.x86_64-linux-gnu.tar.gz"

@@ -1,0 +1,16 @@
+version = "0.1.0+0"
+name = "PipeWireAOQueue_jll"
+uuid = "30c7d52a-5243-5e1f-b778-22f49ec5fee3"
+
+[deps]
+Libdl = "8f399da3-3557-5675-b5ff-fb832c97cbdb"
+JLLWrappers = "692b3bcd-3c85-4b1f-b108-f13ce0eb3210"
+Artifacts = "56f22d72-fd6d-98f1-02f0-08ddc0907c33"
+PipeWireAO_jll = "cde84cf6-9a21-5ce0-b5e3-1526e778c30b"
+
+[compat]
+Libdl = "< 0.0.1, 1"
+julia = "1.10"
+JLLWrappers = "1.7.0"
+Artifacts = "< 0.0.1, 1"
+PipeWireAO_jll = "~4.0.2"
