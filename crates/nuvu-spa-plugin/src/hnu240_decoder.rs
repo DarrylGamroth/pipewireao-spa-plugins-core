@@ -250,6 +250,36 @@ mod tests {
     }
 
     #[test]
+    fn table_four_byte_ramp_decodes_at_figure_one_tap_positions() {
+        let mut carrier = vec![0_u8; 1408 * 131];
+        let block: [u8; 64] = std::array::from_fn(|offset| offset as u8);
+        // The first active block starts after ten rows and two groups.
+        let first_active_block = 10 * 1408 + 128;
+        carrier[first_active_block..first_active_block + block.len()].copy_from_slice(&block);
+
+        let mut decoded = vec![0_u16; 240 * 240];
+        decode_frame(&carrier, 1408, &mut decoded, 240).unwrap();
+
+        // Table 4 supplies the words. Figure 1, rotated clockwise, supplies
+        // their positions and readout directions.
+        let expected = [
+            (0, 57, [0x3b35, 0x2423, 0x0d0c]),    // T6
+            (0, 60, [0x1413, 0x2b25, 0x3d3c]),    // T7
+            (0, 177, [0x2a29, 0x1812, 0x0100]),   // T0
+            (0, 180, [0x0802, 0x1a19, 0x3130]),   // T1
+            (239, 57, [0x3433, 0x1d1c, 0x0b05]),  // T5
+            (239, 60, [0x0403, 0x1b15, 0x2d2c]),  // T4
+            (239, 177, [0x3a39, 0x2822, 0x1110]), // T3
+            (239, 180, [0x0a09, 0x2120, 0x3832]), // T2
+        ];
+        for (y, x, words) in expected {
+            let start = y * 240 + x;
+            assert_eq!(decoded[start..start + words.len()], words, "({x}, {y})");
+        }
+        assert_eq!(decoded.iter().filter(|&&word| word != 0).count(), 24);
+    }
+
+    #[test]
     fn published_carrier_mapping_reconstructs_active_pixels_and_discards_overscan() {
         let mut carrier = vec![0xa5; RAW_WIDTH * RAW_HEIGHT];
         let mut expected = vec![0_u16; OUTPUT_WIDTH * OUTPUT_HEIGHT];
