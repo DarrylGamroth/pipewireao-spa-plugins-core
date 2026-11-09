@@ -18,6 +18,7 @@
 #include <spa/pod/compare.h>
 #include <spa/pod/filter.h>
 #include <spa/pod/iter.h>
+#include <spa/support/loop.h>
 #include <spa/support/plugin.h>
 #include <spa/utils/keys.h>
 #include <spa/utils/string.h>
@@ -55,6 +56,7 @@ struct metrics {
 struct impl {
 	struct spa_handle handle;
 	struct spa_node node;
+	struct spa_loop *data_loop;
 	struct spa_hook_list hooks;
 	struct spa_callbacks callbacks;
 	uint64_t info_all;
@@ -475,10 +477,32 @@ static int port_enum_params(void *object, int seq,
 	return 0;
 }
 
+static int update_started(struct spa_loop *loop SPA_UNUSED, bool async SPA_UNUSED,
+		uint32_t started, const void *data SPA_UNUSED, size_t size SPA_UNUSED,
+		void *object)
+{
+	struct impl *self = object;
+
+	self->started = started != 0;
+	return 0;
+}
+
+static int set_started(struct impl *self, bool started)
+{
+	if (self->data_loop != NULL)
+		return spa_loop_locked(self->data_loop, update_started, started,
+				NULL, 0, self);
+	return update_started(NULL, false, started, NULL, 0, self);
+}
+
 static int release_buffers(struct impl *self)
 {
-	if (self->started)
-		return -EBUSY;
+	int res;
+
+	/* Link removal can clear the pool before the host sends Pause
+	 * or detaches the node's I/O. Wait for in-flight processing. */
+	if (self->started && (res = set_started(self, false)) < 0)
+		return res;
 	memset(self->input.buffers, 0, sizeof(self->input.buffers));
 	self->input.n_buffers = 0;
 	return 0;
@@ -547,10 +571,10 @@ static int port_use_buffers(void *object, enum spa_direction direction,
 	spa_return_val_if_fail(self != NULL, -EINVAL);
 	spa_return_val_if_fail(direction == SPA_DIRECTION_INPUT && port_id == 0,
 			-EINVAL);
-	if (self->started)
-		return -EBUSY;
 	if (n_buffers == 0)
 		return release_buffers(self);
+	if (self->started)
+		return -EBUSY;
 	if (self->input.format == NULL || buffers == NULL ||
 			n_buffers > MAX_BUFFERS || self->input.n_buffers != 0)
 		return -EINVAL;
@@ -565,10 +589,21 @@ static int port_use_buffers(void *object, enum spa_direction direction,
 	return 0;
 }
 
+static int set_buffer_io(struct spa_loop *loop SPA_UNUSED, bool async SPA_UNUSED,
+		uint32_t seq SPA_UNUSED, const void *data, size_t size SPA_UNUSED,
+		void *object)
+{
+	struct impl *self = object;
+
+	self->input.io = *(struct spa_io_buffers *const *)data;
+	return 0;
+}
+
 static int port_set_io(void *object, enum spa_direction direction,
 		uint32_t port_id, uint32_t id, void *data, size_t size)
 {
 	struct impl *self = object;
+	struct spa_io_buffers *io = data;
 
 	spa_return_val_if_fail(self != NULL, -EINVAL);
 	spa_return_val_if_fail(direction == SPA_DIRECTION_INPUT && port_id == 0,
@@ -577,8 +612,10 @@ static int port_set_io(void *object, enum spa_direction direction,
 		return -ENOENT;
 	if (data != NULL && size < sizeof(struct spa_io_buffers))
 		return -ENOSPC;
-	self->input.io = data;
-	return 0;
+	if (self->data_loop != NULL)
+		return spa_loop_locked(self->data_loop, set_buffer_io,
+				SPA_ID_INVALID, &io, sizeof(io), self);
+	return set_buffer_io(NULL, false, SPA_ID_INVALID, &io, sizeof(io), self);
 }
 
 static int reuse_buffer(void *object, uint32_t port_id, uint32_t buffer_id)
@@ -599,12 +636,10 @@ static int send_command(void *object, const struct spa_command *command)
 		if (self->input.format == NULL || self->input.n_buffers == 0 ||
 				self->input.io == NULL)
 			return -EIO;
-		self->started = true;
-		return 0;
+		return set_started(self, true);
 	case SPA_NODE_COMMAND_Pause:
 	case SPA_NODE_COMMAND_Suspend:
-		self->started = false;
-		return 0;
+		return set_started(self, false);
 	default:
 		return -ENOTSUP;
 	}
@@ -672,10 +707,8 @@ static int process(void *object)
 
 	spa_return_val_if_fail(self != NULL, -EINVAL);
 	metric_add(&self->metrics.process_calls, 1);
-	if (!self->started)
+	if (!self->started || (io = self->input.io) == NULL)
 		return SPA_STATUS_OK;
-	if ((io = self->input.io) == NULL)
-		return -EIO;
 	if (io->status != SPA_STATUS_HAVE_DATA)
 		return SPA_STATUS_NEED_DATA;
 	if (io->buffer_id >= self->input.n_buffers ||
@@ -754,11 +787,10 @@ static int init(const struct spa_handle_factory *factory,
 	int res;
 
 	(void)factory;
-	(void)support;
-	(void)n_support;
 	spa_return_val_if_fail(handle != NULL, -EINVAL);
 	self = (struct impl *)handle;
 	memset(self, 0, sizeof(*self));
+	self->data_loop = spa_support_find(support, n_support, SPA_TYPE_INTERFACE_DataLoop);
 	self->handle.get_interface = get_interface;
 	self->handle.clear = clear;
 	spa_hook_list_init(&self->hooks);

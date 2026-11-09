@@ -497,15 +497,37 @@ static void exercise(const struct spa_handle_factory *factory)
 	spa_assert_se(spa_node_port_set_param(node, SPA_DIRECTION_INPUT, 0,
 			SPA_PARAM_Format, 0, audio) == -EBUSY);
 	spa_assert_se(spa_node_port_use_buffers(node, SPA_DIRECTION_INPUT, 0, 0,
-			NULL, 0) == -EBUSY);
-	spa_assert_se(spa_node_send_command(node, &suspend) == 0);
-	spa_assert_se(spa_node_port_set_io(node, SPA_DIRECTION_INPUT, 0,
-			SPA_IO_Buffers, NULL, 0) == 0);
+			buffers, SPA_N_ELEMENTS(buffers)) == -EBUSY);
+	spa_assert_se(spa_node_port_set_param(node, SPA_DIRECTION_INPUT, 0,
+			SPA_PARAM_Format, 0, NULL) == -EBUSY);
+
+	/* PipeWire can clear the pool before Pause or I/O detach. */
 	spa_assert_se(spa_node_port_use_buffers(node, SPA_DIRECTION_INPUT, 0, 0,
 			NULL, 0) == 0);
+	io.buffer_id = 1;
+	io.status = SPA_STATUS_HAVE_DATA;
+	spa_assert_se(spa_node_process(node) == SPA_STATUS_OK);
+	spa_assert_se(io.status == SPA_STATUS_HAVE_DATA);
+	spa_assert_se(spa_node_port_set_io(node, SPA_DIRECTION_INPUT, 0,
+			SPA_IO_Buffers, NULL, 0) == 0);
 	spa_assert_se(spa_node_port_set_param(node, SPA_DIRECTION_INPUT, 0,
 			SPA_PARAM_Format, 0, NULL) == 0);
 	spa_assert_se(spa_node_send_command(node, &start) == -EIO);
+	spa_assert_se(spa_node_port_set_param(node, SPA_DIRECTION_INPUT, 0,
+			SPA_PARAM_Format, 0, video) == 0);
+	spa_assert_se(spa_node_port_use_buffers(node, SPA_DIRECTION_INPUT, 0, 0,
+			buffers, SPA_N_ELEMENTS(buffers)) == 0);
+	spa_assert_se(spa_node_port_set_io(node, SPA_DIRECTION_INPUT, 0,
+			SPA_IO_Buffers, &io, sizeof(io)) == 0);
+	io.buffer_id = 1;
+	io.status = SPA_STATUS_HAVE_DATA;
+	spa_assert_se(spa_node_process(node) == SPA_STATUS_OK);
+	spa_assert_se(spa_node_send_command(node, &start) == 0);
+	spa_assert_se(spa_node_process(node) == SPA_STATUS_NEED_DATA);
+	digest = digest_payload(digest, storage[1].payload,
+			SPA_N_ELEMENTS(storage[1].payload));
+	expect_metrics(node, &capture, 4, 6, 138, 1, 10, digest, 138);
+	spa_assert_se(spa_node_send_command(node, &suspend) == 0);
 
 	spa_hook_remove(&listener);
 	spa_assert_se(spa_handle_clear(handle) == 0);
