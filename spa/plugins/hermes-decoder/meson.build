@@ -36,4 +36,16 @@ if get_option('tests').allowed()
     ],
     depends: hermes_decoder_lib,
   )
+
+  hermes_batch_test = executable(
+    'spa-hermes-decoder-batch-test',
+    'test-batch.c',
+    dependencies: [spa_dep, dl_dep],
+  )
+  test(
+    'spa-hermes-decoder-batch',
+    hermes_batch_test,
+    args: hermes_decoder_lib.full_path(),
+    depends: hermes_decoder_lib,
+  )
 endif

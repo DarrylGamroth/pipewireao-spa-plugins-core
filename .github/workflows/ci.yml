@@ -1,0 +1,122 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  coverage:
+    name: Tests and coverage
+    runs-on: ubuntu-24.04
+    container:
+      image: docker.io/library/debian@sha256:7378260c0a098d27ac206225db5e7d92b8c7c84ea7afccc86eeb513756bbd392 # Debian 13
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+    defaults:
+      run:
+        shell: bash
+    env:
+      CC: gcc
+      CXX: g++
+    steps:
+      - name: Install build dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates curl g++ gcovr git gnupg meson ninja-build pkgconf python3 libclang-dev
+
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+
+      - name: Install PipeWireAO 4.0.5
+        run: |
+          prefix="$RUNNER_TEMP/pipewireao"
+          archive="$RUNNER_TEMP/PipeWireAO.v4.0.5.x86_64-linux-gnu.tar.gz"
+          curl --fail --silent --show-error --location --retry 3 --output "$archive" \
+            "https://github.com/DarrylGamroth/PipeWireAO_jll.jl/releases/download/PipeWireAO-v4.0.5+0/PipeWireAO.v4.0.5.x86_64-linux-gnu.tar.gz"
+          printf '%s  %s\n' 3ec7fa12811af376adeebb85985b552a13752cdf95a9c1bc6f42aaa2fb4f1828 "$archive" | sha256sum --strict --check -
+          mkdir "$prefix"
+          tar -xzf "$archive" -C "$prefix"
+          echo "PKG_CONFIG_PATH=$prefix/lib/pkgconfig:$prefix/share/pkgconfig" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$prefix/lib" >> "$GITHUB_ENV"
+
+      - name: Install the Rust coverage toolchain
+        run: |
+          curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs | \
+            sh -s -- -y --profile minimal --default-toolchain 1.100.0 --component llvm-tools
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          tool="$RUNNER_TEMP/cargo-llvm-cov.tar.gz"
+          curl --fail --silent --show-error --location --retry 3 --output "$tool" \
+            https://github.com/taiki-e/cargo-llvm-cov/releases/download/v0.9.1/cargo-llvm-cov-x86_64-unknown-linux-gnu.tar.gz
+          printf '%s  %s\n' b3f68e625481fed9b16444174f3fa5ebcdbde4a1878803a35eabe2dcefcdc41a "$tool" | sha256sum --strict --check -
+          tar -xzf "$tool" -C "$HOME/.cargo/bin"
+
+      - name: Build and run native tests
+        id: tests
+        run: |
+          coverage_env=$(cargo llvm-cov show-env --sh --remap-path-prefix)
+          eval "$coverage_env"
+          export LLVM_PROFILE_FILE="$PWD/build-coverage/rust-profiles/%p-%16m.profraw"
+          mkdir -p build-coverage/rust-profiles
+          meson setup build-coverage -Dtests=enabled -Db_coverage=true
+          meson compile -C build-coverage
+          meson test -C build-coverage --print-errorlogs
+
+      - name: Collect native coverage
+        run: |
+          gcovr --root . --lcov build-coverage/coverage-c.info --print-summary build-coverage
+          sed -i "s|^SF:${PWD}/|SF:|" build-coverage/coverage-c.info
+          grep -Eq '^LF:[1-9]' build-coverage/coverage-c.info
+
+      - name: Run Rust workspace tests and collect coverage
+        run: |
+          coverage_env=$(cargo llvm-cov show-env --sh --remap-path-prefix)
+          eval "$coverage_env"
+          export LLVM_PROFILE_FILE="$PWD/build-coverage/rust-profiles/%p-%16m.profraw"
+          python3 scripts/rust-coverage.py build-coverage
+          grep -Eq '^LF:[1-9]' build-coverage/coverage-rust.info
+
+      - name: Save coverage reports and test logs
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: test-and-coverage
+          path: |
+            build-coverage/coverage-*.info
+            build-coverage/meson-logs/testlog.txt
+
+      - name: Upload coverage to Codecov
+        if: ${{ !cancelled() && hashFiles('build-coverage/coverage-*.info') != '' && (github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]')) }}
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7
+        with:
+          use_oidc: true
+          disable_search: true
+          files: build-coverage/coverage-c.info,build-coverage/coverage-rust.info
+          fail_ci_if_error: true
+
+      - name: Require more than 90% line coverage
+        if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
+        run: |
+          for report in build-coverage/coverage-c.info build-coverage/coverage-rust.info; do
+            awk -F: '
+              $1 == "LF" { found += $2 }
+              $1 == "LH" { hit += $2 }
+              END {
+                if (found == 0) {
+                  print FILENAME ": empty line coverage report"
+                  exit 1
+                }
+                printf "%s: %.2f%% line coverage (%d/%d)\n", FILENAME, 100 * hit / found, hit, found
+                exit !(100 * hit > 90 * found)
+              }
+            ' "$report" || failed=1
+          done
+          exit "${failed:-0}"

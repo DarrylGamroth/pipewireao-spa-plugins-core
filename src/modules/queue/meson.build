@@ -30,6 +30,25 @@ if get_option('tests').allowed()
   )
   test('pipewireao-queue-lifetime', queue_lifetime_test)
 
+  queue_callbacks_test = executable(
+    'pipewireao-queue-callbacks-test',
+    'test-callbacks.c',
+    link_with: queue_state,
+    dependencies: [spa_dep, pipewire_dep, threads_dep],
+    c_args: ['-DPACKAGE_VERSION="@0@"'.format(meson.project_version())],
+    link_args: [
+      '-Wl,--wrap=pw_stream_dequeue_buffer',
+      '-Wl,--wrap=pw_stream_queue_buffer',
+      '-Wl,--wrap=pw_stream_return_buffer',
+      '-Wl,--wrap=pw_stream_get_data_loop',
+      '-Wl,--wrap=pw_stream_get_state',
+      '-Wl,--wrap=pw_stream_update_properties',
+      '-Wl,--wrap=pw_stream_set_error',
+      '-Wl,--wrap=pw_impl_module_update_properties',
+    ],
+  )
+  test('pipewireao-queue-callbacks', queue_callbacks_test)
+
   queue_state_test = executable(
     'pipewireao-queue-state-test',
     'test-queue.c',

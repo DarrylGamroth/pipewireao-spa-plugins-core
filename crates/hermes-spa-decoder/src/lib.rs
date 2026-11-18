@@ -336,6 +336,104 @@ pub unsafe extern "C" fn spa_handle_factory_enum(
 mod tests {
     use super::*;
 
+    fn with_properties<T>(
+        properties: &[(&CStr, &CStr)],
+        test: impl FnOnce(&sys::spa_dict) -> T,
+    ) -> T {
+        let items: Vec<_> = properties
+            .iter()
+            .map(|(key, value)| sys::spa_dict_item {
+                key: key.as_ptr(),
+                value: value.as_ptr(),
+            })
+            .collect();
+        test(&sys::spa_dict {
+            flags: 0,
+            n_items: items.len() as u32,
+            items: items.as_ptr(),
+        })
+    }
+
+    #[test]
+    fn decoder_options_validate_geometry_and_batch_rate() {
+        let defaults = HermesDecoderNode::new(None).unwrap();
+        assert_eq!(
+            (defaults.frames, defaults.counters, defaults.bits),
+            (50, 1, 8)
+        );
+        assert_eq!((defaults.width, defaults.height), (64, 32));
+        with_properties(
+            &[
+                (c"api.hermes.frames-per-buffer", c"2"),
+                (c"api.hermes.bits-per-pixel", c"16"),
+                (c"api.hermes.half-array", c"on"),
+                (c"api.hermes.batch-rate", c"500/3"),
+            ],
+            |info| {
+                let node = HermesDecoderNode::new(Some(info)).unwrap();
+                assert_eq!((node.frames, node.counters, node.bits), (2, 1, 16));
+                assert_eq!((node.width, node.height), (32, 32));
+                assert_eq!(
+                    node.ports()[INPUT].key().direction,
+                    sys::SPA_DIRECTION_INPUT
+                );
+                assert_eq!(
+                    node.ports()[OUTPUT].key().direction,
+                    sys::SPA_DIRECTION_OUTPUT
+                );
+            },
+        );
+
+        for (key, value) in [
+            (c"api.hermes.frames-per-buffer", c"0"),
+            (c"api.hermes.frames-per-buffer", c"one"),
+            (c"api.hermes.bits-per-pixel", c"12"),
+            (c"api.hermes.counters", c"4"),
+            (c"api.hermes.half-array", c"maybe"),
+            (c"api.hermes.batch-rate", c"1000"),
+            (c"api.hermes.batch-rate", c"a/1"),
+            (c"api.hermes.batch-rate", c"1/b"),
+            (c"api.hermes.batch-rate", c"1/0"),
+        ] {
+            with_properties(&[(key, value)], |info| {
+                assert!(
+                    matches!(HermesDecoderNode::new(Some(info)), Err(error) if error == -libc::EINVAL)
+                );
+            });
+        }
+        with_properties(
+            &[
+                (c"api.hermes.counters", c"2"),
+                (c"api.hermes.half-array", c"yes"),
+            ],
+            |info| {
+                assert!(
+                    matches!(HermesDecoderNode::new(Some(info)), Err(error) if error == -libc::EINVAL)
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn factory_enumerates_once_and_rejects_missing_pointers() {
+        let mut factory = ptr::null();
+        let mut index = 0;
+        // The factory and index point to live writable variables.
+        unsafe {
+            assert_eq!(
+                spa_handle_factory_enum(ptr::null_mut(), &mut index),
+                -libc::EINVAL
+            );
+            assert_eq!(
+                spa_handle_factory_enum(&mut factory, ptr::null_mut()),
+                -libc::EINVAL
+            );
+            assert_eq!(spa_handle_factory_enum(&mut factory, &mut index), 1);
+            assert_eq!(factory, FACTORY.as_ptr());
+            assert_eq!(spa_handle_factory_enum(&mut factory, &mut index), 0);
+        }
+    }
+
     fn encode_u8(decoded: &[u8]) -> Vec<u8> {
         let pixels = decoded.len();
         let mut carrier = vec![0; pixels];
