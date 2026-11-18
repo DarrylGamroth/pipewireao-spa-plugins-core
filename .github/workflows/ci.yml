@@ -68,6 +68,8 @@ jobs:
           mkdir -p build-coverage/rust-profiles
           meson setup build-coverage -Dtests=enabled -Db_coverage=true
           meson compile -C build-coverage
+          runtime_dir=$(mktemp -d)
+          export PIPEWIREAO_RUNTIME_DIR="$runtime_dir"
           meson test -C build-coverage --print-errorlogs
 
       - name: Collect native coverage

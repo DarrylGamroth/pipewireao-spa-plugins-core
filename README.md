@@ -82,6 +82,8 @@ eval "$coverage_env"
 export LLVM_PROFILE_FILE="$PWD/build-coverage/rust-profiles/%p-%16m.profraw"
 mkdir -p build-coverage/rust-profiles
 CC=gcc CXX=g++ meson setup build-coverage -Dtests=enabled -Db_coverage=true
+runtime_dir=$(mktemp -d)
+export PIPEWIREAO_RUNTIME_DIR="$runtime_dir"
 meson test -C build-coverage --print-errorlogs
 gcovr --root . --lcov build-coverage/coverage-c.info --print-summary build-coverage
 python3 scripts/rust-coverage.py build-coverage
