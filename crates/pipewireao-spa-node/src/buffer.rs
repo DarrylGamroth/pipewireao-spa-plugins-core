@@ -650,3 +650,7 @@ mod metadata_tests {
         ));
     }
 }
+
+#[cfg(test)]
+#[path = "tests/frame-buffer.rs"]
+mod frame_tests;

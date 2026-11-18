@@ -580,3 +580,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "tests/port-params.rs"]
+mod port_param_tests;

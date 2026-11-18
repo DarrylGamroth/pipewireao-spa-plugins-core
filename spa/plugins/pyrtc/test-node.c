@@ -16,8 +16,10 @@
 #include <spa/node/command.h>
 #include <spa/node/io.h>
 #include <spa/node/node.h>
+#include <spa/node/utils.h>
 #include <spa/param/ndarray-utils.h>
 #include <spa/pod/parser.h>
+#include <spa/support/log.h>
 #include <spa/support/plugin.h>
 #include <spa/utils/string.h>
 
@@ -131,11 +133,11 @@ static void init_buffer(struct test_buffer *storage, bool output)
 	}
 }
 
-static struct spa_pod *build_format(uint8_t *storage, size_t size)
+static struct spa_pod *build_format(uint8_t *storage, size_t size, int32_t width)
 {
 	struct spa_pod_builder builder = SPA_POD_BUILDER_INIT(storage,
 			(uint32_t)size);
-	const int32_t shape[] = { HEIGHT, WIDTH };
+	const int32_t shape[] = { HEIGHT, width };
 
 	return spa_pod_builder_add_object(&builder,
 			SPA_TYPE_OBJECT_Format, SPA_PARAM_Format,
@@ -169,6 +171,39 @@ static struct spa_handle *make_node_access(
 	spa_assert_se(spa_handle_get_interface(handle, SPA_TYPE_INTERFACE_Node,
 			(void **)node) == 0);
 	return handle;
+}
+
+static void test_invalid_options(const struct spa_handle_factory *source,
+		const struct spa_handle_factory *sink)
+{
+	char name[128], long_profile[1024];
+	struct spa_dict_item items[] = {
+		SPA_DICT_ITEM_INIT(SPA_KEY_API_PYRTC_NAME, name),
+		SPA_DICT_ITEM_INIT(SPA_KEY_API_PYRTC_SCHEMA, schema),
+		{ 0 },
+	};
+	struct spa_dict options = SPA_DICT_INIT(items, 2);
+	struct spa_handle *handle = calloc(1, source->get_size(source, &options));
+
+	spa_assert_se(handle != NULL);
+	make_name(name, sizeof(name), "missing");
+	spa_assert_se(source->init(source, handle, &options, NULL, 0) == -ENOENT);
+	options.n_items = 1;
+	spa_assert_se(sink->init(sink, handle, &options, NULL, 0) == -EINVAL);
+
+	options.n_items = 3;
+	items[2] = SPA_DICT_ITEM_INIT(SPA_KEY_API_PYRTC_ACCESS, SPA_PYRTC_ACCESS_CREATE);
+	spa_assert_se(source->init(source, handle, &options, NULL, 0) == -EINVAL);
+	items[2].value = "unknown";
+	spa_assert_se(sink->init(sink, handle, &options, NULL, 0) == -EINVAL);
+	memset(long_profile, 'x', sizeof(long_profile) - 1);
+	long_profile[sizeof(long_profile) - 1] = '\0';
+	items[2] = SPA_DICT_ITEM_INIT(SPA_KEY_API_PYRTC_PROFILE, long_profile);
+	spa_assert_se(sink->init(sink, handle, &options, NULL, 0) == -ENAMETOOLONG);
+	items[2].value = "test-profile";
+	spa_assert_se(sink->init(sink, handle, &options, NULL, 0) == 0);
+	spa_assert_se(spa_handle_clear(handle) == 0);
+	free(handle);
 }
 
 static struct spa_handle *make_node(const struct spa_handle_factory *factory,
@@ -211,18 +246,72 @@ static const struct spa_node_events metadata_events = {
 	.result = metadata_result,
 };
 
+static void check_node_contract(struct spa_handle *handle, struct spa_node *node,
+		enum spa_direction direction)
+{
+	const struct spa_command start = SPA_NODE_COMMAND_INIT(SPA_NODE_COMMAND_Start);
+	const struct spa_command flush = SPA_NODE_COMMAND_INIT(SPA_NODE_COMMAND_Flush);
+	static const struct spa_node_callbacks callbacks = { SPA_VERSION_NODE_CALLBACKS };
+	const struct spa_pod_int bad = SPA_POD_INIT_Int(0);
+	void *unused;
+
+	spa_assert_se(spa_handle_get_interface(handle, SPA_TYPE_INTERFACE_Log, &unused) == -ENOENT);
+	spa_assert_se(spa_node_set_callbacks(node, &callbacks, NULL) == 0);
+	spa_assert_se(spa_node_enum_params(node, 1, SPA_PARAM_Props, 0, 1, NULL) == -ENOENT);
+	spa_assert_se(spa_node_set_param(node, SPA_PARAM_Props, 0, NULL) == -ENOENT);
+	spa_assert_se(spa_node_set_io(node, SPA_IO_Clock, NULL, 0) == -ENOENT);
+	spa_assert_se(spa_node_add_port(node, direction, 1, NULL) == -ENOTSUP);
+	spa_assert_se(spa_node_remove_port(node, direction, 0) == -ENOTSUP);
+	spa_assert_se(spa_node_send_command(node, &start) == -EIO);
+	spa_assert_se(spa_node_send_command(node, &flush) == -ENOTSUP);
+	spa_assert_se(spa_node_process(node) == SPA_STATUS_OK);
+	spa_assert_se(spa_node_port_enum_params(node, 1, direction, 0,
+			SPA_PARAM_EnumFormat, 0, 2, NULL) == 0);
+	spa_assert_se(spa_node_port_enum_params(node, 1, direction, 0,
+			SPA_PARAM_IO, 0, 2, NULL) == 0);
+	spa_assert_se(spa_node_port_enum_params(node, 1, direction, 0,
+			SPA_PARAM_Props, 0, 1, NULL) == -ENOENT);
+	spa_assert_se(spa_node_port_set_param(node, direction, 0,
+			SPA_PARAM_Props, 0, NULL) == -ENOENT);
+	spa_assert_se(spa_node_port_set_param(node, direction, 0,
+			SPA_PARAM_Format, 0, &bad.pod) == -EINVAL);
+	spa_assert_se(spa_node_port_set_io(node, direction, 0, SPA_IO_Clock, NULL, 0) == -ENOENT);
+}
+
 static void configure_buffers(struct spa_node *node,
 		enum spa_direction direction, struct test_buffer storage[2],
 		struct spa_buffer *buffers[2], struct spa_io_buffers *io)
 {
 	uint8_t format_storage[1024];
 	struct spa_pod *format = build_format(format_storage,
-			sizeof(format_storage));
+			sizeof(format_storage), WIDTH);
 	uint32_t i;
 
 	spa_assert_se(format != NULL);
+	spa_assert_se(spa_node_port_reuse_buffer(node, 0, 0) == -ENOTSUP);
+	spa_assert_se(spa_node_port_set_io(node, direction, 0, SPA_IO_Buffers,
+			io, sizeof(*io) - 1) == -ENOSPC);
+	if (direction == SPA_DIRECTION_OUTPUT) {
+		uint8_t wrong_shape[1024];
+		spa_assert_se(spa_node_port_set_param(node, direction, 0, SPA_PARAM_Format, 0,
+				build_format(wrong_shape, sizeof(wrong_shape), WIDTH + 1)) == -EINVAL);
+	}
+	spa_assert_se(spa_node_port_set_param(node, direction, 0,
+			SPA_PARAM_Format, SPA_NODE_PARAM_FLAG_TEST_ONLY, format) == 0);
 	spa_assert_se(spa_node_port_set_param(node, direction, 0,
 			SPA_PARAM_Format, 0, format) == 0);
+	uint8_t advertised_storage[1024];
+	struct spa_pod_builder builder = SPA_POD_BUILDER_INIT(advertised_storage, sizeof(advertised_storage));
+	struct spa_pod *advertised;
+	uint32_t index = 0;
+	struct spa_ndarray_info negotiated = SPA_NDARRAY_INFO_INIT();
+
+	spa_assert_se(spa_node_port_enum_params_sync(node, direction, 0, SPA_PARAM_Format,
+			&index, NULL, &advertised, &builder) == 1);
+	spa_assert_se(spa_format_ndarray_parse(advertised, &negotiated) >= 0);
+	spa_assert_se(negotiated.shape[0] == HEIGHT && negotiated.shape[1] == WIDTH);
+	spa_assert_se(spa_node_port_enum_params_sync(node, direction, 0, SPA_PARAM_Format,
+			&index, NULL, &advertised, &builder) == 0);
 	for (i = 0; i < 2; i++) {
 		init_buffer(&storage[i], direction == SPA_DIRECTION_OUTPUT);
 		buffers[i] = &storage[i].buffer;
@@ -266,6 +355,7 @@ static void stop_and_clear(struct spa_handle *handle, struct spa_node *node,
 			NULL, 0) == 0);
 	spa_assert_se(spa_node_port_use_buffers(node, direction, 0, 0,
 			NULL, 0) == 0);
+	spa_assert_se(spa_node_port_set_param(node, direction, 0, SPA_PARAM_Format, 0, NULL) == 0);
 	spa_assert_se(spa_handle_clear(handle) == 0);
 	free(handle);
 	(void)io;
@@ -285,8 +375,20 @@ static void test_sink(const struct spa_handle_factory *factory)
 
 	make_name(name, sizeof(name), "sink");
 	handle = make_node(factory, name, &node);
+	check_node_contract(handle, node, SPA_DIRECTION_INPUT);
 	configure_buffers(node, SPA_DIRECTION_INPUT, storage, buffers, &io);
 	spa_assert_se(spa_node_send_command(node, &start) == 0);
+	spa_assert_se(spa_node_send_command(node, &start) == 0);
+	spa_assert_se(spa_node_process(node) == SPA_STATUS_NEED_DATA);
+	io.status = SPA_STATUS_HAVE_DATA;
+	io.buffer_id = 2;
+	spa_assert_se(spa_node_process(node) == -EPROTO);
+	io.buffer_id = 0;
+	storage[0].chunk.flags = SPA_CHUNK_FLAG_CORRUPTED;
+	spa_assert_se(spa_node_process(node) == -EINVAL);
+	storage[0].chunk.flags = 0;
+	storage[0].chunk.size = sizeof(expected) - 1;
+	spa_assert_se(spa_node_process(node) == -EINVAL);
 	memcpy(storage[0].samples, expected, sizeof(expected));
 	storage[0].chunk.size = sizeof(expected);
 	storage[0].chunk.stride = WIDTH * sizeof(uint16_t);
@@ -323,6 +425,7 @@ static void test_source(const struct spa_handle_factory *factory)
 	raw_open(&stream, name, true);
 	raw_write(&stream, initial);
 	handle = make_node(factory, name, &node);
+	check_node_contract(handle, node, SPA_DIRECTION_OUTPUT);
 	configure_buffers(node, SPA_DIRECTION_OUTPUT, storage, buffers, &io);
 	spa_assert_se(spa_node_send_command(node, &start) == 0);
 	spa_assert_se(spa_node_process(node) == SPA_STATUS_HAVE_DATA);
@@ -347,6 +450,32 @@ static void test_source(const struct spa_handle_factory *factory)
 	spa_assert_se(storage[io.buffer_id].header.seq == 2);
 	spa_assert_se(storage[io.buffer_id].optical.flags == 0);
 	spa_assert_se(storage[io.buffer_id].optical.classification == 0);
+	/* Keep both output buffers held downstream while shared memory advances. */
+	uint32_t held = io.buffer_id;
+	raw_write(&stream, initial);
+	spa_assert_se(spa_node_process(node) == SPA_STATUS_HAVE_DATA && io.buffer_id == held);
+	spa_assert_se(storage[held].header.seq == 2);
+	io.status = SPA_STATUS_NEED_DATA;
+	io.buffer_id = 2;
+	spa_assert_se(spa_node_process(node) == -EPROTO);
+	io.buffer_id = SPA_ID_INVALID;
+	spa_assert_se(spa_node_process(node) == SPA_STATUS_HAVE_DATA);
+	spa_assert_se(io.buffer_id < SPA_N_ELEMENTS(buffers) && io.buffer_id != held);
+	uint32_t other = io.buffer_id;
+	io.status = SPA_STATUS_NEED_DATA;
+	io.buffer_id = SPA_ID_INVALID;
+	raw_write(&stream, updated);
+	spa_assert_se(spa_node_process(node) == SPA_STATUS_OK && io.buffer_id == SPA_ID_INVALID);
+	spa_assert_se(storage[held].header.seq == 2 && storage[other].header.seq == 3);
+	io.buffer_id = held;
+	stream.metadata[0] = -1.0;
+	spa_assert_se(spa_node_process(node) == -EPROTO && io.buffer_id == SPA_ID_INVALID);
+	stream.metadata[0] = 4.0;
+	spa_assert_se(spa_node_process(node) == SPA_STATUS_HAVE_DATA && io.buffer_id == held);
+	spa_assert_se(storage[held].header.seq == 4);
+
+	spa_assert_se(spa_node_port_set_io(node, SPA_DIRECTION_OUTPUT, 0, SPA_IO_Buffers, NULL, 0) == 0);
+	spa_assert_se(spa_node_process(node) == -EIO);
 	stop_and_clear(handle, node, SPA_DIRECTION_OUTPUT, &io);
 	raw_close(&stream, true);
 }
@@ -401,6 +530,7 @@ int main(int argc, char **argv)
 			spa_streq(source->name, SPA_NAME_API_PYRTC_SOURCE));
 	spa_assert_se(enumerate(&sink, &index) == 1 && sink != NULL &&
 			spa_streq(sink->name, SPA_NAME_API_PYRTC_SINK));
+	test_invalid_options(source, sink);
 	test_sink(sink);
 	test_source(source);
 	test_attached_sink(sink);

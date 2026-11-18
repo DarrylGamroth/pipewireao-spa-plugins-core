@@ -1,5 +1,8 @@
 # PipeWireAO SPA plugins: core
 
+[![CI](https://github.com/DarrylGamroth/pipewireao-spa-plugins-core/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/DarrylGamroth/pipewireao-spa-plugins-core/actions/workflows/ci.yml)
+[![Coverage](https://codecov.io/github/DarrylGamroth/pipewireao-spa-plugins-core/branch/main/graph/badge.svg)](https://app.codecov.io/github/DarrylGamroth/pipewireao-spa-plugins-core)
+
 This repository is the SDK-independent foundation of a PipeWireAO plugin
 deployment. Build it once, then add only the separate hardware and transport
 plugin repositories required by the target system.
@@ -58,3 +61,30 @@ The container build requires access to the pinned Rust bindings and an
 authorized source for the PipeWireAO build/runtime dependencies. BuildKit
 secrets `apt_sources`, `apt_auth`, and `apt_keyring` can provide private package
 sources without adding credentials to the image or repository.
+
+## CI and coverage
+
+GitHub Actions builds and tests against PipeWireAO 4.0.5 on Debian 13.
+It runs the Meson suite, including the PipeWireAO queue graph tests, and the
+Rust workspace tests. The Rust report also includes Rust code executed by
+Meson while loading the SPA plugins.
+
+CI requires more than 90% line coverage in each LCOV report. The workflow
+saves both reports as artifacts and uses GitHub OIDC for Codecov uploads.
+Fork pull requests get the same coverage checks.
+
+With the workflow dependencies, the Rust `llvm-tools` component, and
+`cargo-llvm-cov` installed, start with a fresh coverage build directory.
+
+```sh
+coverage_env=$(cargo llvm-cov show-env --sh --remap-path-prefix)
+eval "$coverage_env"
+export LLVM_PROFILE_FILE="$PWD/build-coverage/rust-profiles/%p-%16m.profraw"
+mkdir -p build-coverage/rust-profiles
+CC=gcc CXX=g++ meson setup build-coverage -Dtests=enabled -Db_coverage=true
+runtime_dir=$(mktemp -d)
+export PIPEWIREAO_RUNTIME_DIR="$runtime_dir"
+meson test -C build-coverage --print-errorlogs
+gcovr --root . --lcov build-coverage/coverage-c.info --print-summary build-coverage
+python3 scripts/rust-coverage.py build-coverage
+```

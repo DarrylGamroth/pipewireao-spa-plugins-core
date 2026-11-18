@@ -19,6 +19,8 @@
 #include <spa/param/video/raw-utils.h>
 #include <spa/pod/compare.h>
 #include <spa/pod/iter.h>
+#include <spa/support/log.h>
+#include <spa/support/loop.h>
 #include <spa/support/plugin.h>
 
 #include <pipewireao-plugins/discard.h>
@@ -302,6 +304,32 @@ static void expect_metrics(struct spa_node *node,
 	spa_assert_se(digest_bytes == expected_digest_bytes);
 }
 
+static int loop_locked(void *data, spa_invoke_func_t function, uint32_t seq,
+		const void *args, size_t size, void *user_data)
+{
+	return function(data, false, seq, args, size, user_data);
+}
+
+static void check_options(const struct spa_handle_factory *factory, struct spa_handle *handle)
+{
+	char long_name[512];
+	const struct spa_dict_item bad[] = {
+		SPA_DICT_ITEM_INIT(SPA_KEY_NODE_NAME, long_name),
+		SPA_DICT_ITEM_INIT(SPA_KEY_NODE_DESCRIPTION, long_name),
+		SPA_DICT_ITEM_INIT(SPA_KEY_API_PIPEWIREAO_DISCARD_MINIMUM_BUFFER_SIZE, "2147483648"),
+		SPA_DICT_ITEM_INIT(SPA_KEY_API_PIPEWIREAO_DISCARD_MINIMUM_BUFFER_SIZE, "invalid"),
+	};
+
+	memset(long_name, 'x', sizeof(long_name) - 1);
+	long_name[sizeof(long_name) - 1] = '\0';
+	for (size_t i = 0; i < SPA_N_ELEMENTS(bad); i++) {
+		const struct spa_dict options = SPA_DICT_INIT(&bad[i], 1);
+
+		spa_assert_se(spa_handle_factory_init(factory, handle, &options, NULL, 0) ==
+				(i < 2 ? -ENAMETOOLONG : -EINVAL));
+	}
+}
+
 static void exercise(const struct spa_handle_factory *factory)
 {
 	const size_t size = spa_handle_factory_get_size(factory, NULL);
@@ -341,12 +369,30 @@ static void exercise(const struct spa_handle_factory *factory)
 	};
 	const struct spa_dict node_info = SPA_DICT_INIT_ARRAY(node_items);
 	uint64_t digest = UINT64_C(14695981039346656037);
+	static const struct spa_loop_methods methods = {
+		SPA_VERSION_LOOP_METHODS, .locked = loop_locked,
+	};
+	static const struct spa_node_callbacks callbacks = { SPA_VERSION_NODE_CALLBACKS };
+	struct spa_loop loop = { .iface = SPA_INTERFACE_INIT(SPA_TYPE_INTERFACE_Loop,
+			SPA_VERSION_LOOP, &methods, &loop) };
+	const struct spa_support support = SPA_SUPPORT_INIT(SPA_TYPE_INTERFACE_DataLoop, &loop);
+	const struct spa_command flush = SPA_NODE_COMMAND_INIT(SPA_NODE_COMMAND_Flush);
+	const struct spa_pod_int nonformat = SPA_POD_INIT_Int(0);
+	void *unused;
 
 	spa_assert_se(handle != NULL);
-	spa_assert_se(spa_handle_factory_init(factory, handle, &node_info,
-			NULL, 0) == 0);
+	check_options(factory, handle);
+
+	spa_assert_se(spa_handle_factory_init(factory, handle, &node_info, &support, 1) == 0);
+	spa_assert_se(spa_handle_get_interface(handle, SPA_TYPE_INTERFACE_Log, &unused) == -ENOENT);
 	spa_assert_se(spa_handle_get_interface(handle, SPA_TYPE_INTERFACE_Node,
 			(void **)&node) == 0);
+	spa_assert_se(spa_node_set_callbacks(node, &callbacks, NULL) == 0);
+	spa_assert_se(spa_node_add_port(node, SPA_DIRECTION_INPUT, 1, NULL) == -ENOTSUP);
+	spa_assert_se(spa_node_remove_port(node, SPA_DIRECTION_INPUT, 0) == -ENOTSUP);
+	spa_assert_se(spa_node_port_reuse_buffer(node, 0, 0) == -ENOTSUP);
+	spa_assert_se(spa_node_send_command(node, &flush) == -ENOTSUP);
+	spa_assert_se(spa_node_enum_params(node, 1, SPA_PARAM_Format, 0, 1, NULL) == -ENOENT);
 	spa_assert_se(spa_node_add_listener(node, &listener, &node_events,
 			&capture) == 0);
 	spa_assert_se(spa_streq(capture.node_name, "discard-test"));
@@ -372,6 +418,18 @@ static void exercise(const struct spa_handle_factory *factory)
 	spa_assert_se(spa_node_set_io(node, SPA_IO_Position, NULL, 0) == 0);
 	spa_assert_se(spa_node_set_io(node, SPA_IO_Clock, NULL, 0) == -ENOENT);
 
+	spa_assert_se(spa_node_port_enum_params(node, 1, SPA_DIRECTION_INPUT, 0,
+			SPA_PARAM_Meta, 0, 1, NULL) == -ENOENT);
+	spa_assert_se(enum_port_one(node, &capture, SPA_PARAM_EnumFormat, &nonformat.pod) == NULL);
+	const struct spa_pod *port_io = enum_port_one(node, &capture, SPA_PARAM_IO, NULL);
+	spa_assert_se(port_io != NULL);
+	spa_assert_se(spa_pod_parse_object(port_io, SPA_TYPE_OBJECT_ParamIO, NULL,
+			SPA_PARAM_IO_id, SPA_POD_Id(&node_io_id)) >= 0);
+	spa_assert_se(node_io_id == SPA_IO_Buffers);
+	spa_assert_se(spa_node_port_set_io(node, SPA_DIRECTION_INPUT, 0,
+			SPA_IO_Clock, NULL, 0) == -ENOENT);
+	spa_assert_se(spa_node_port_set_io(node, SPA_DIRECTION_INPUT, 0,
+			SPA_IO_Buffers, &io, sizeof(io) - 1) == -ENOSPC);
 	advertised = enum_port_one(node, &capture, SPA_PARAM_EnumFormat, NULL);
 	spa_assert_se(advertised != NULL);
 	spa_assert_se(spa_pod_is_object(advertised));
@@ -553,6 +611,11 @@ int main(int argc, char **argv)
 	spa_assert_se(spa_streq(factory->name,
 			SPA_NAME_API_PIPEWIREAO_DISCARD));
 	spa_assert_se(enumerate(&factory, &index) == 0);
+	const struct spa_interface_info *interface;
+	index = 0;
+	spa_assert_se(factory->enum_interface_info(factory, &interface, &index) == 1);
+	spa_assert_se(spa_streq(interface->type, SPA_TYPE_INTERFACE_Node));
+	spa_assert_se(factory->enum_interface_info(factory, &interface, &index) == 0);
 	exercise(factory);
 	spa_assert_se(dlclose(library) == 0);
 	return 0;

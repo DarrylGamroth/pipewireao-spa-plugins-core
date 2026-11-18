@@ -3,6 +3,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -53,6 +54,11 @@ static void test_dtype_mapping(void)
 	spa_assert_se(pyrtc_format_from_element(SPA_ELEMENT_TYPE_F32_LE,
 			PYRTC_MAX_DIMENSIONS + 1u, shape, &format) == -EINVAL);
 	spa_assert_se(pyrtc_stream_create("/invalid", &format, &stream) == -EINVAL);
+	const uint32_t empty[PYRTC_MAX_DIMENSIONS] = { 0 };
+	const uint32_t oversized[PYRTC_MAX_DIMENSIONS] = { INT32_MAX, INT32_MAX, INT32_MAX };
+	spa_assert_se(pyrtc_format_from_element(SPA_ELEMENT_TYPE_F32_LE, 1, empty, &format) == -EINVAL);
+	spa_assert_se(pyrtc_format_from_element(SPA_ELEMENT_TYPE_F32_LE, 3, oversized, &format) == -EOVERFLOW);
+	spa_assert_se(pyrtc_format_from_element(SPA_ELEMENT_TYPE_UNKNOWN, 1, shape, &format) == -ENOTSUP);
 }
 
 static void test_roundtrip(void)
@@ -94,6 +100,11 @@ static void test_roundtrip(void)
 	spa_assert_se(close(fd) == 0);
 
 	spa_assert_se(pyrtc_stream_open(name, true, &reader, &opened) == 0);
+	spa_assert_se(pyrtc_stream_has_update(writer, false, &available) == -EINVAL);
+	spa_assert_se(pyrtc_stream_has_update(reader, true, &available) == 0 && available);
+	spa_assert_se(pyrtc_stream_read(reader, observed, sizeof(observed) - 1, &sequence) == -EINVAL);
+	spa_assert_se(pyrtc_stream_write(writer, expected, sizeof(expected) - 1) == -EINVAL);
+	spa_assert_se(pyrtc_stream_write(reader, expected, sizeof(expected)) == -EINVAL);
 	spa_assert_se(opened.rank == 2 && opened.shape[0] == 3 &&
 			opened.shape[1] == 4 &&
 			opened.element_type == SPA_ELEMENT_TYPE_U16_LE);
@@ -145,14 +156,40 @@ static void test_raw_pyrtc_stream(void)
 			metadata_fd, 0);
 	spa_assert_se(mapping != MAP_FAILED);
 	memcpy(mapping, metadata, sizeof(metadata));
-	spa_assert_se(munmap(mapping, sizeof(metadata)) == 0);
-
+	static const struct { size_t field; double value; int status; } cases[] = {
+		{ 0, -1.0, -EPROTO },
+		{ 0, 1.5, -EPROTO },
+		{ 2, 23.0, -EPROTO },
+		{ 3, NAN, -EPROTO },
+		{ 3, 14.0, -ENOTSUP },
+		{ 4, 0.0, -EPROTO },
+		{ 5, 2.5, -EPROTO },
+	};
+	for (size_t i = 0; i < SPA_N_ELEMENTS(cases); i++) {
+		double *values = mapping;
+		values[cases[i].field] = cases[i].value;
+		spa_assert_se(pyrtc_stream_open(name, true, &reader, &opened) == cases[i].status);
+		spa_assert_se(reader == NULL);
+		values[cases[i].field] = metadata[cases[i].field];
+	}
+	spa_assert_se(ftruncate(data_fd, (off_t)bytes - 1) == 0);
+	spa_assert_se(pyrtc_stream_open(name, true, &reader, &opened) == -EPROTO);
+	spa_assert_se(ftruncate(data_fd, (off_t)bytes) == 0);
 	spa_assert_se(pyrtc_stream_open(name, true, &reader, &opened) == 0);
 	spa_assert_se(opened.element_type == SPA_ELEMENT_TYPE_BOOL8 &&
 			opened.rank == SPA_N_ELEMENTS(shape) &&
 			memcmp(opened.shape, shape, sizeof(shape)) == 0 &&
 			opened.bytes == bytes);
+	uint8_t payload[24] = { 0 };
+	uint64_t sequence = 0;
+	double *values = mapping;
+	values[0] = NAN;
+	spa_assert_se(pyrtc_stream_read(reader, payload, sizeof(payload), &sequence) == -EPROTO);
+	values[0] = metadata[0];
+	spa_assert_se(pyrtc_stream_read(reader, payload, sizeof(payload), &sequence) == 0);
+	spa_assert_se(sequence == 7);
 	pyrtc_stream_close(reader);
+	spa_assert_se(munmap(mapping, sizeof(metadata)) == 0);
 	spa_assert_se(close(metadata_fd) == 0 && close(data_fd) == 0);
 	spa_assert_se(shm_unlink(metadata_name) == 0);
 	spa_assert_se(shm_unlink(data_name) == 0);

@@ -19,6 +19,7 @@ cleanup() {
 trap cleanup EXIT HUP INT TERM
 
 export PIPEWIRE_RUNTIME_DIR=$runtime_dir
+export PIPEWIREAO_RUNTIME_DIR=$runtime_dir
 export XDG_RUNTIME_DIR=$runtime_dir
 export PIPEWIREAO_MODULE_DIR=$queue_module_dir${PIPEWIREAO_MODULE_DIR:+:$PIPEWIREAO_MODULE_DIR}
 
