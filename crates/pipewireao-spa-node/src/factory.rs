@@ -1177,7 +1177,7 @@ mod tests {
         let mut handle = test_handle(TestNode::new(None).unwrap());
         let object = ptr::from_mut(handle.as_mut()).cast::<c_void>();
         let mut io: sys::spa_io_buffers = unsafe { std::mem::zeroed() };
-        let format = Format::f32_image("org.calculon.test/1", 4, 3, None).unwrap();
+        let format = Format::f32_image("org.example.test/1", 4, 3, None).unwrap();
         {
             let mut state = claim(handle.as_ref()).unwrap();
             state.node.reject_format_withdrawal = true;
@@ -1349,7 +1349,7 @@ mod tests {
             let mut handle = test_handle(TestNode::new(None).unwrap());
             let object = ptr::from_mut(handle.as_mut()).cast::<c_void>();
             let mut io: sys::spa_io_buffers = unsafe { std::mem::zeroed() };
-            let format = Format::f32_image("org.calculon.test/1", 4, 3, None).unwrap();
+            let format = Format::f32_image("org.example.test/1", 4, 3, None).unwrap();
             {
                 let mut state = claim(handle.as_ref()).unwrap();
                 for port in state.node.ports_mut() {

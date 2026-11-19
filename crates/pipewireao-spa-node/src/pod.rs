@@ -390,7 +390,7 @@ mod tests {
 
     #[test]
     fn fixed_native_ndarray_round_trips() {
-        let format = Format::f32_image("org.calculon.test/1", 4, 3, None).unwrap();
+        let format = Format::f32_image("org.example.test/1", 4, 3, None).unwrap();
         let constraint = FormatConstraint::exact(format.clone());
         let value = format_value(&format, sys::SPA_PARAM_Format);
         let parsed = unsafe {
@@ -481,7 +481,7 @@ mod tests {
 
     #[test]
     fn fixated_choice_is_unwrapped_before_exact_format_validation() {
-        let format = Format::f32_image("org.calculon.test/1", 4, 3, None).unwrap();
+        let format = Format::f32_image("org.example.test/1", 4, 3, None).unwrap();
         let constraint = FormatConstraint::exact(format.clone());
         let Value::Object(mut object) = format_value(&format, sys::SPA_PARAM_Format) else {
             unreachable!();
@@ -507,7 +507,7 @@ mod tests {
 
     #[test]
     fn unresolved_choice_is_rejected_before_format_validation() {
-        let format = Format::f32_image("org.calculon.test/1", 4, 3, None).unwrap();
+        let format = Format::f32_image("org.example.test/1", 4, 3, None).unwrap();
         let Value::Object(mut object) = format_value(&format, sys::SPA_PARAM_Format) else {
             unreachable!();
         };
@@ -533,7 +533,7 @@ mod tests {
 
     #[test]
     fn optional_schema_may_be_absent() {
-        let format = Format::f32_image("org.calculon.test/1", 4, 3, None).unwrap();
+        let format = Format::f32_image("org.example.test/1", 4, 3, None).unwrap();
         let Value::Object(mut object) = format_value(&format, sys::SPA_PARAM_Format) else {
             unreachable!();
         };
@@ -559,8 +559,8 @@ mod tests {
 
     #[test]
     fn wrong_schema_is_rejected_by_exact_constraint() {
-        let expected = Format::f32_image("org.calculon.test/1", 4, 3, None).unwrap();
-        let candidate = Format::f32_image("org.calculon.other/1", 4, 3, None).unwrap();
+        let expected = Format::f32_image("org.example.test/1", 4, 3, None).unwrap();
+        let candidate = Format::f32_image("org.example.other/1", 4, 3, None).unwrap();
         let value = format_value(&candidate, sys::SPA_PARAM_Format);
         assert_eq!(
             parse_format(value, &[FormatConstraint::exact(expected)]),
@@ -570,7 +570,7 @@ mod tests {
 
     #[test]
     fn ndarray_shape_is_height_then_width() {
-        let format = Format::f32_image("org.calculon.test/1", 4, 3, None).unwrap();
+        let format = Format::f32_image("org.example.test/1", 4, 3, None).unwrap();
         let Value::Object(object) = format_value(&format, sys::SPA_PARAM_Format) else {
             unreachable!();
         };
