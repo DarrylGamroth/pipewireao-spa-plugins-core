@@ -74,12 +74,7 @@ if fs.is_dir('include/pipewireao-plugins')
 endif
 
 if get_option('tests').allowed()
-  image_frame_test = executable(
-    'spa-image-frame-test',
-    'spa/plugins/test-image-frame.c',
-    dependencies: spa_dep,
-  )
-  test('spa-image-frame', image_frame_test)
+  subdir('tests')
 
 endif
 

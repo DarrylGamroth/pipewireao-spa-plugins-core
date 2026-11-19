@@ -29,7 +29,7 @@ if get_option('tests').allowed()
   nm = find_program('nm')
   ndarray_test = executable(
     'spa-ndarray-transforms-test',
-    'test-frame-assembly.c',
+    '../../../tests/ndarray/test-frame-assembly.c',
     dependencies: [spa_dep, dl_dep],
     include_directories: plugin_include,
     c_args: ['-Wno-pedantic'],

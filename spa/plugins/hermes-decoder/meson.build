@@ -39,7 +39,7 @@ if get_option('tests').allowed()
 
   hermes_batch_test = executable(
     'spa-hermes-decoder-batch-test',
-    'test-batch.c',
+    '../../../tests/hermes-decoder/test-batch.c',
     dependencies: [spa_dep, dl_dep],
   )
   test(

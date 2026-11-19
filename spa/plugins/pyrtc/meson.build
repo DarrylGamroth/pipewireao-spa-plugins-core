@@ -12,7 +12,7 @@ pyrtc_lib = shared_library(
 if get_option('tests').allowed()
   pyrtc_factory_test = executable(
     'spa-pyrtc-factory-test',
-    'test-factory.c',
+    '../../../tests/pyrtc/test-factory.c',
     dependencies: [spa_dep, dl_dep],
     include_directories: plugin_include,
   )
@@ -25,14 +25,14 @@ if get_option('tests').allowed()
 
   pyrtc_stream_test = executable(
     'spa-pyrtc-stream-test',
-    ['test-stream.c', 'stream.c'],
+    ['../../../tests/pyrtc/test-stream.c', 'stream.c'],
     dependencies: [spa_dep, m_dep],
   )
   test('spa-pyrtc-stream', pyrtc_stream_test)
 
   pyrtc_node_test = executable(
     'spa-pyrtc-node-test',
-    'test-node.c',
+    '../../../tests/pyrtc/test-node.c',
     dependencies: [spa_dep, dl_dep],
     include_directories: plugin_include,
   )

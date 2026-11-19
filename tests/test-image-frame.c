@@ -36,18 +36,24 @@ static void test_preserve_and_reuse(void)
 		{ SPA_META_AcquisitionIdentity, sizeof(identity), &identity },
 		{ 0x3fe, sizeof(opaque), &opaque },
 	};
-	struct pwao_image_frame frame = { .size = 32, .offset = 4,
-		.stride = 8, .sequence = 123, .pts = 17, .metas = source, .n_metas = 2 };
+	struct pwao_image_frame frame = { .size = 32, .offset = 4, .stride = 8,
+		.header_flags = SPA_META_HEADER_FLAG_MARKER, .header_offset = 12,
+		.chunk_flags = SPA_CHUNK_FLAG_CORRUPTED,
+		.sequence = 123, .pts = 17, .metas = source, .n_metas = 2 };
 	init_buffer(&output);
 	spa_assert_se(pwao_image_frame_write(&output.buffer, &frame, PWAO_IMAGE_FRAME_REQUIRE_HEADER) == 0);
 	spa_assert_se(output.header.seq == 123 && output.header.pts == 17);
 	spa_assert_se(output.identity.sequence == UINT64_MAX - 1 && output.identity.generation == UINT64_MAX);
-	spa_assert_se(output.opaque == UINT64_MAX && output.chunk.size == 32);
+	spa_assert_se(output.opaque == UINT64_MAX);
+	spa_assert_se(output.chunk.offset == 4 && output.chunk.size == 32 && output.chunk.stride == 8);
+	spa_assert_se(output.chunk.flags == SPA_CHUNK_FLAG_CORRUPTED);
+	spa_assert_se(output.header.flags == SPA_META_HEADER_FLAG_MARKER && output.header.offset == 12);
 	/* The source remains unchanged, including an optional opaque payload. */
 	spa_assert_se(identity.sequence == UINT64_MAX - 1 && opaque == UINT64_MAX);
-	frame.metas = NULL; frame.n_metas = 0;
+	frame.metas = NULL; frame.n_metas = 0; frame.pts = SPA_TIME_INVALID;
 	spa_assert_se(pwao_image_frame_write(&output.buffer, &frame, 0) == 0);
 	spa_assert_se(output.identity.flags == 0 && output.identity.sequence == 0 && output.opaque == 0);
+	spa_assert_se(output.header.pts == SPA_TIME_INVALID);
 }
 static void test_rejection_before_publication(void)
 {
@@ -68,5 +74,10 @@ static void test_rejection_before_publication(void)
 	spa_assert_se(pwao_image_frame_write(&output.buffer, &frame, 0) == -ENOSPC);
 	frame.size = 32; frame.header_flags = UINT32_MAX;
 	spa_assert_se(pwao_image_frame_write(&output.buffer, &frame, 0) == -EINVAL);
+	frame.header_flags = 0;
+	output.buffer.n_metas = 0;
+	spa_assert_se(pwao_image_frame_write(&output.buffer, &frame,
+			PWAO_IMAGE_FRAME_REQUIRE_HEADER) == -ENOTSUP);
+	spa_assert_se(output.header.seq == 91 && output.chunk.size == 0);
 }
 int main(void) { test_preserve_and_reuse(); test_rejection_before_publication(); return 0; }

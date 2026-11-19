@@ -23,7 +23,7 @@ queue_module = shared_library(
 if get_option('tests').allowed()
   queue_lifetime_test = executable(
     'pipewireao-queue-lifetime-test',
-    'test-lifetime.c',
+    '../../../tests/queue/test-lifetime.c',
     link_with: queue_state,
     dependencies: [spa_dep, pipewire_dep, threads_dep],
     c_args: ['-DPACKAGE_VERSION="@0@"'.format(meson.project_version())],
@@ -32,7 +32,7 @@ if get_option('tests').allowed()
 
   queue_callbacks_test = executable(
     'pipewireao-queue-callbacks-test',
-    'test-callbacks.c',
+    '../../../tests/queue/test-callbacks.c',
     link_with: queue_state,
     dependencies: [spa_dep, pipewire_dep, threads_dep],
     c_args: ['-DPACKAGE_VERSION="@0@"'.format(meson.project_version())],
@@ -51,26 +51,26 @@ if get_option('tests').allowed()
 
   queue_state_test = executable(
     'pipewireao-queue-state-test',
-    'test-queue.c',
+    '../../../tests/queue/test-queue.c',
     link_with: queue_state,
     dependencies: [threads_dep, spa_dep],
   )
   test('pipewireao-queue-state', queue_state_test)
 
   queue_metadata_test = executable('pipewireao-queue-metadata-test',
-    'test-metadata.c', '../../../spa/plugins/metadata.c', dependencies: spa_dep)
+    '../../../tests/queue/test-metadata.c', '../../../spa/plugins/metadata.c', dependencies: spa_dep)
   test('pipewireao-queue-metadata', queue_metadata_test)
 
   queue_properties_test = executable(
     'pipewireao-queue-properties-test',
-    'test-properties.c',
+    '../../../tests/queue/test-properties.c',
     dependencies: spa_dep,
   )
   test('pipewireao-queue-properties', queue_properties_test)
 
   queue_buffer_test = executable(
     'pipewireao-queue-buffer-test',
-    'test-buffer-transfer.c',
+    '../../../tests/queue/test-buffer-transfer.c',
     link_with: queue_state,
     dependencies: spa_dep,
   )
@@ -78,7 +78,7 @@ if get_option('tests').allowed()
 
   queue_module_test = executable(
     'pipewireao-queue-module-test',
-    'test-module.c',
+    '../../../tests/queue/test-module.c',
     dependencies: [dl_dep, spa_dep, pipewire_dep],
   )
   queue_module_test_env = environment()
@@ -107,7 +107,7 @@ if get_option('tests').allowed()
 
   queue_live_test = executable(
     'pipewireao-queue-live-test',
-    'test-live.c',
+    '../../../tests/queue/test-live.c',
     dependencies: [spa_dep, pipewire_dep, threads_dep],
   )
   test(
@@ -132,7 +132,7 @@ if get_option('tests').allowed()
   if pipewire_daemon.found()
     queue_remote_properties_test = executable(
       'pipewireao-queue-remote-properties-test',
-      'test-remote-properties.c',
+      '../../../tests/queue/test-remote-properties.c',
       dependencies: [spa_dep, pipewire_dep],
     )
     foreach name, options : {
@@ -154,10 +154,10 @@ if get_option('tests').allowed()
         name,
         shell,
         args: [
-          files('test-remote-properties.sh'),
+          files('../../../tests/queue/test-remote-properties.sh'),
           queue_remote_properties_test.full_path(),
           pipewire_daemon.full_path(),
-          meson.current_source_dir() / 'test-remote-properties.conf',
+          meson.current_source_dir() / '../../../tests/queue/test-remote-properties.conf',
           meson.current_build_dir(),
         ] + options,
         depends: [queue_module, queue_remote_properties_test],
@@ -167,17 +167,17 @@ if get_option('tests').allowed()
     endforeach
     queue_remote_test = executable(
       'pipewireao-queue-remote-test',
-      'test-remote-registry.c',
+      '../../../tests/queue/test-remote-registry.c',
       dependencies: [spa_dep, pipewire_dep],
     )
     test(
       'pipewireao-queue-remote',
       shell,
       args: [
-        files('test-remote.sh'),
+        files('../../../tests/queue/test-remote.sh'),
         queue_remote_test.full_path(),
         pipewire_daemon.full_path(),
-        meson.current_source_dir() / 'test-remote.conf',
+        meson.current_source_dir() / '../../../tests/queue/test-remote.conf',
         meson.current_build_dir(),
       ],
       depends: [queue_module, queue_remote_test],

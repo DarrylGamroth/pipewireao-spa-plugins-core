@@ -22,7 +22,7 @@ if get_option('tests').allowed()
   python = import('python').find_installation('python3')
   discard_test = executable(
     'spa-pipewireao-discard-test',
-    'test-sink.c',
+    '../../../tests/discard/test-sink.c',
     dependencies: [spa_dep, dl_dep],
     include_directories: plugin_include,
     c_args: ['-Wno-pedantic'],

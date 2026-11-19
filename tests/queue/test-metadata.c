@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: MIT */
-#include "../../../spa/plugins/metadata.h"
+#include "../../spa/plugins/metadata.h"
 #include <stdlib.h>
 #define CHECK(x) do { if (!(x)) abort(); } while (0)
 #include <stdio.h>

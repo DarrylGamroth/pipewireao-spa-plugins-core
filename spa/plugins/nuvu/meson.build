@@ -29,7 +29,7 @@ if get_option('tests').allowed()
   nm = find_program('nm')
   nuvu_test = executable(
     'spa-nuvu-factory-test',
-    'test-factory.c',
+    '../../../tests/nuvu/test-factory.c',
     dependencies: [spa_dep, dl_dep],
     include_directories: plugin_include,
     c_args: ['-Wno-pedantic'],
