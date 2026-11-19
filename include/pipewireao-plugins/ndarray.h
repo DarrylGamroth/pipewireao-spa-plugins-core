@@ -18,8 +18,8 @@
 #define SPA_KEY_API_NDARRAY_VIDEO_FORMAT "api.ndarray.video-format"
 
 #define SPA_NDARRAY_SCHEMA_RAW_PIXEL_ROW_BLOCK \
-	"org.calculon.ao.raw-pixel-row-block/1"
+	"pipewireao/raw-pixel-row-block-u16/1"
 #define SPA_NDARRAY_SCHEMA_CALIBRATED_PIXEL_ROW_BLOCK \
-	"org.calculon.ao.calibrated-pixel-row-block/1"
+	"pipewireao/calibrated-pixel-row-block-f32/1"
 
 #endif /* PIPEWIREAO_PLUGINS_NDARRAY_H */

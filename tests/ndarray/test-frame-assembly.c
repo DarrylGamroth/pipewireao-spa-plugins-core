@@ -288,9 +288,9 @@ static void test_complete_frame_passthrough(
 		SPA_DICT_ITEM_INIT(SPA_KEY_API_NDARRAY_FRAME_RATE, "1000/1"),
 		SPA_DICT_ITEM_INIT(SPA_KEY_API_NDARRAY_ROW_BLOCK_ROWS, "2"),
 		SPA_DICT_ITEM_INIT(SPA_KEY_API_NDARRAY_ROW_BLOCK_SCHEMA,
-				"org.calculon.ao.calibrated-pixel-row-block/1"),
+				"pipewireao/calibrated-pixel-row-block-f32/1"),
 		SPA_DICT_ITEM_INIT(SPA_KEY_API_NDARRAY_FRAME_SCHEMA,
-				"org.calculon.ao.calibrated-pixels/1"),
+				"pipewireao/calibrated-pixels-f32/1"),
 		SPA_DICT_ITEM_INIT(SPA_KEY_API_NDARRAY_ELEMENT_TYPE,
 				"F32_LE"),
 		SPA_DICT_ITEM_INIT(SPA_KEY_API_NDARRAY_LAYOUT,
@@ -372,7 +372,7 @@ static void test_video_view(const struct spa_handle_factory *factory)
 		SPA_DICT_ITEM_INIT(SPA_KEY_API_NDARRAY_FRAME_SIZE, "4x4"),
 		SPA_DICT_ITEM_INIT(SPA_KEY_API_NDARRAY_FRAME_RATE, "1000/1"),
 		SPA_DICT_ITEM_INIT(SPA_KEY_API_NDARRAY_SCHEMA,
-				"org.calculon.ao.raw-detector-pixels/1"),
+				"pipewireao/raw-detector-pixels-u16/1"),
 		SPA_DICT_ITEM_INIT(SPA_KEY_API_NDARRAY_VIDEO_FORMAT,
 				"GRAY16_LE"),
 	};
@@ -414,7 +414,7 @@ static void test_video_view(const struct spa_handle_factory *factory)
 		spa_assert_se(ndarray.rate.num == 1000 && ndarray.rate.denom == 1);
 		spa_assert_se(spa_streq(format_string(format,
 				SPA_FORMAT_NDARRAY_schema),
-				"org.calculon.ao.raw-detector-pixels/1"));
+				"pipewireao/raw-detector-pixels-u16/1"));
 		configure(&view, SPA_DIRECTION_OUTPUT, 0);
 		spa_assert_se(spa_node_send_command(view.node, &start) == -EIO);
 		spa_assert_se(view.capture.node_flags & SPA_NODE_FLAG_NEED_CONFIGURE);
@@ -561,9 +561,9 @@ int main(int argc, char **argv)
 		SPA_DICT_ITEM_INIT(SPA_KEY_API_NDARRAY_FRAME_RATE, "1000/1"),
 		SPA_DICT_ITEM_INIT(SPA_KEY_API_NDARRAY_ROW_BLOCK_ROWS, "2"),
 		SPA_DICT_ITEM_INIT(SPA_KEY_API_NDARRAY_ROW_BLOCK_SCHEMA,
-				"org.calculon.ao.calibrated-pixel-row-block/1"),
+				"pipewireao/calibrated-pixel-row-block-f32/1"),
 		SPA_DICT_ITEM_INIT(SPA_KEY_API_NDARRAY_FRAME_SCHEMA,
-				"org.calculon.ao.calibrated-pixels/1"),
+				"pipewireao/calibrated-pixels-f32/1"),
 		SPA_DICT_ITEM_INIT(SPA_KEY_API_NDARRAY_ELEMENT_TYPE,
 				"F32_LE"),
 		SPA_DICT_ITEM_INIT(SPA_KEY_API_NDARRAY_LAYOUT,
