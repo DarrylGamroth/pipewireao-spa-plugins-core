@@ -98,6 +98,12 @@ struct fixture {
 	bool video_format;
 };
 
+enum fixture_links {
+	CAPTURE_FIRST,
+	PLAYBACK_FIRST,
+	CAPTURE_ONLY,
+};
+
 struct latency_sample {
 	uint64_t total;
 	uint64_t trigger_call;
@@ -599,6 +605,8 @@ static uint64_t module_counter(struct fixture *fixture, const char *name)
 	char *end = NULL;
 	uint64_t result;
 
+	if (value == NULL)
+		fprintf(stderr, "queue module did not publish %s\n", name);
 	CHECK(value != NULL);
 	errno = 0;
 	result = strtoull(value, &end, 10);
@@ -606,16 +614,18 @@ static uint64_t module_counter(struct fixture *fixture, const char *name)
 	return result;
 }
 
-static void wait_for_stats(struct fixture *fixture, uint64_t publications)
+static void wait_for_module_counter(struct fixture *fixture, const char *name,
+		uint64_t expected)
 {
 	uint64_t deadline = monotonic_nsec() + 2u * SPA_NSEC_PER_SEC;
 
 	while (monotonic_nsec() < deadline) {
 		iterate_main_loop(fixture);
-		if (module_counter(fixture, "queue.stats.publications") == publications)
+		if (module_counter(fixture, name) == expected)
 			return;
 	}
-	fprintf(stderr, "timed out waiting for module statistics\n");
+	fprintf(stderr, "timed out waiting for %s: expected=%" PRIu64 " actual=%" PRIu64 "\n",
+			name, expected, module_counter(fixture, name));
 	abort();
 }
 
@@ -714,14 +724,23 @@ static void release_observer(struct fixture *fixture)
 	fixture->observer.held_sequence = 0;
 }
 
+static void link_observer(struct fixture *fixture, struct pw_impl_node *playback_node)
+{
+	struct pw_impl_node *observer_node;
+
+	create_endpoint_stream(fixture, "test.queue-observer", PW_DIRECTION_INPUT,
+			&observer_events, &fixture->observer.endpoint);
+	observer_node = wait_for_node(fixture, "test.queue-observer");
+	fixture->playback_link = link_nodes(fixture, playback_node, observer_node);
+}
+
 static void fixture_init_format(struct fixture *fixture, const char *overflow,
-		const char *storage, bool video_format, bool observer_first)
+		const char *storage, bool video_format, enum fixture_links links)
 {
 	char args[512];
 	const char *capture_queue_id, *playback_queue_id;
 	int length;
-	struct pw_impl_node *producer_node, *capture_node, *playback_node,
-			*observer_node;
+	struct pw_impl_node *producer_node, *capture_node, *playback_node;
 
 	memset(fixture, 0, sizeof(*fixture));
 	fixture->video_format = video_format;
@@ -742,10 +761,11 @@ static void fixture_init_format(struct fixture *fixture, const char *overflow,
 			"queue.max-buffers=1 queue.overflow=%s queue.storage=%s "
 			"queue.media=%s "
 			"remote.name=internal "
-			"capture.props={ node.name=test.queue-input node.loop.name=queue.capture } "
+			"capture.props={ node.name=test.queue-input node.loop.name=queue.capture %s } "
 			"playback.props={ node.name=test.queue-output node.loop.name=queue.playback }",
 			overflow, storage,
-			video_format ? "video/raw" : "application/ndarray");
+			video_format ? "video/raw" : "application/ndarray",
+			links == CAPTURE_ONLY ? "node.pause-on-idle=false" : "");
 	CHECK(length > 0 && (size_t)length < sizeof(args));
 	fixture->module = pw_context_load_module(fixture->context,
 			"libpipewire-module-queue", args, NULL);
@@ -782,27 +802,19 @@ static void fixture_init_format(struct fixture *fixture, const char *overflow,
 	atomic_init(&fixture->observer.hold, 1);
 	fixture->observer.producer = &fixture->producer;
 	fixture->observer.lease_storage = strcmp(storage, "lease") == 0;
-	if (observer_first) {
-		create_endpoint_stream(fixture, "test.queue-observer",
-				PW_DIRECTION_INPUT, &observer_events,
-				&fixture->observer.endpoint);
-		observer_node = wait_for_node(fixture, "test.queue-observer");
-		fixture->playback_link = link_nodes(fixture, playback_node,
-				observer_node);
-	}
+	if (links == PLAYBACK_FIRST)
+		link_observer(fixture, playback_node);
 	create_endpoint_stream(fixture, "test.queue-producer", PW_DIRECTION_OUTPUT,
 			&producer_events, &fixture->producer.endpoint);
 	producer_node = wait_for_node(fixture, "test.queue-producer");
 	fixture->capture_link = link_nodes(fixture, producer_node, capture_node);
 	wait_for_link(fixture, fixture->capture_link);
-	if (!observer_first) {
-		create_endpoint_stream(fixture, "test.queue-observer",
-				PW_DIRECTION_INPUT, &observer_events,
-				&fixture->observer.endpoint);
-		observer_node = wait_for_node(fixture, "test.queue-observer");
-		fixture->playback_link = link_nodes(fixture, playback_node,
-				observer_node);
+	if (links == CAPTURE_ONLY) {
+		wait_for_streaming(fixture, &fixture->producer.endpoint);
+		return;
 	}
+	if (links == CAPTURE_FIRST)
+		link_observer(fixture, playback_node);
 	wait_for_link(fixture, fixture->playback_link);
 	wait_for_streaming(fixture, &fixture->producer.endpoint);
 	wait_for_streaming(fixture, &fixture->observer.endpoint);
@@ -818,7 +830,7 @@ static void fixture_init_format(struct fixture *fixture, const char *overflow,
 static void fixture_init(struct fixture *fixture, const char *overflow,
 		const char *storage)
 {
-	fixture_init_format(fixture, overflow, storage, false, false);
+	fixture_init_format(fixture, overflow, storage, false, CAPTURE_FIRST);
 }
 
 static void fixture_clear(struct fixture *fixture)
@@ -864,7 +876,7 @@ static void test_drop_policy(const char *overflow, const char *storage,
 	CHECK(fixture.observer.sequence[1] == expected_second);
 	atomic_store_explicit(&fixture.observer.hold, 0, memory_order_release);
 	release_observer(&fixture);
-	wait_for_stats(&fixture, 9);
+	wait_for_module_counter(&fixture, "queue.stats.publications", 9);
 	CHECK(module_counter(&fixture, "queue.stats.replacements") == replacements);
 	CHECK(module_counter(&fixture, "queue.stats.dropped-arrivals") ==
 			dropped_arrivals);
@@ -878,7 +890,7 @@ static void test_video_format(void)
 {
 	struct fixture fixture;
 
-	fixture_init_format(&fixture, "drop-oldest", "copy", true, false);
+	fixture_init_format(&fixture, "drop-oldest", "copy", true, CAPTURE_FIRST);
 	trigger_producer(&fixture, 1);
 	trigger_observer(&fixture, 1);
 	CHECK(fixture.observer.sequence[0] == 1);
@@ -892,7 +904,7 @@ static void test_observer_first(const char *storage)
 {
 	struct fixture fixture;
 
-	fixture_init_format(&fixture, "drop-oldest", storage, false, true);
+	fixture_init_format(&fixture, "drop-oldest", storage, false, PLAYBACK_FIRST);
 	trigger_producer(&fixture, 1);
 	trigger_observer(&fixture, 1);
 	CHECK(fixture.observer.sequence[0] == 1);
@@ -919,7 +931,7 @@ static void test_backpressure(const char *storage)
 	CHECK(fixture.observer.sequence[2] == 3);
 	atomic_store_explicit(&fixture.observer.hold, 0, memory_order_release);
 	release_observer(&fixture);
-	wait_for_stats(&fixture, 3);
+	wait_for_module_counter(&fixture, "queue.stats.publications", 3);
 	CHECK(module_counter(&fixture, "queue.stats.backpressure") == 1);
 	CHECK(module_counter(&fixture, "queue.stats.replacements") == 0);
 	CHECK(module_counter(&fixture, "queue.stats.dropped-arrivals") == 0);
@@ -985,6 +997,51 @@ static void test_module_destruction(const char *storage,
 			memory_order_relaxed) == 0);
 	CHECK(atomic_load_explicit(&fixture.observer.endpoint.errors,
 			memory_order_relaxed) == 0);
+	fixture_clear(&fixture);
+}
+
+static void test_copy_capture_withdrawal(bool detach_playback)
+{
+	struct fixture fixture;
+	struct pw_impl_node *producer_node, *capture_node;
+	uint64_t generation;
+
+	/* Keep capture active on idle so Link removal exercises buffer withdrawal
+	 * without relying on a separate Pause to finish first. */
+	fixture_init_format(&fixture, "drop-oldest", "copy", false, CAPTURE_ONLY);
+	if (detach_playback) {
+		link_observer(&fixture, wait_for_node(&fixture, "test.queue-output"));
+		wait_for_link(&fixture, fixture.playback_link);
+		wait_for_streaming(&fixture, &fixture.observer.endpoint);
+		wait_for_module_counter(&fixture, "queue.state.playback-buffers", 3);
+		pw_impl_link_destroy(fixture.playback_link);
+		fixture.playback_link = NULL;
+		wait_for_module_counter(&fixture, "queue.state.playback-buffers", 0);
+	}
+	trigger_producer(&fixture, 1);
+	wait_for_module_counter(&fixture, "queue.stats.publications", 1);
+	CHECK(module_counter(&fixture, "queue.state.playback-buffers") == 0);
+	CHECK(module_counter(&fixture, "queue.state.pending-depth") == 1);
+	CHECK(module_counter(&fixture, "queue.stats.deliveries") == 0);
+	generation = module_counter(&fixture, "queue.state.capture-generation");
+
+	pw_impl_link_destroy(fixture.capture_link);
+	fixture.capture_link = NULL;
+	wait_for_module_counter(&fixture, "queue.state.capture-buffers", 0);
+	CHECK(module_counter(&fixture, "queue.state.pending-depth") == 0);
+	CHECK(module_counter(&fixture, "queue.stats.withdrawal-returns") == 1);
+	CHECK(module_counter(&fixture, "queue.stats.protocol-errors") == 0);
+
+	producer_node = wait_for_node(&fixture, "test.queue-producer");
+	capture_node = wait_for_node(&fixture, "test.queue-input");
+	fixture.capture_link = link_nodes(&fixture, producer_node, capture_node);
+	wait_for_link(&fixture, fixture.capture_link);
+	wait_for_streaming(&fixture, &fixture.producer.endpoint);
+	wait_for_module_counter(&fixture, "queue.state.capture-generation", generation + 1);
+	trigger_producer(&fixture, 2);
+	wait_for_module_counter(&fixture, "queue.stats.publications", 2);
+	CHECK(module_counter(&fixture, "queue.stats.withdrawal-returns") == 1);
+	CHECK(module_counter(&fixture, "queue.stats.protocol-errors") == 0);
 	fixture_clear(&fixture);
 }
 
@@ -1119,7 +1176,7 @@ static void test_lease_generation_replacement(void)
 	CHECK(fixture.observer.held != NULL);
 	atomic_store_explicit(&fixture.observer.hold, 0, memory_order_release);
 	release_observer(&fixture);
-	wait_for_stats(&fixture, 2);
+	wait_for_module_counter(&fixture, "queue.stats.publications", 2);
 	CHECK(module_counter(&fixture, "queue.state.capture-generation") == 2);
 	CHECK(module_counter(&fixture, "queue.state.requested-generation") == 2);
 	CHECK(module_counter(&fixture, "queue.state.installed-generation") == 2);
@@ -1334,7 +1391,7 @@ static void run_producer_benchmark(const char *storage)
 	}
 	measurement_end = monotonic_nsec();
 	release_observer(&fixture);
-	wait_for_stats(&fixture, expected);
+	wait_for_module_counter(&fixture, "queue.stats.publications", expected);
 	CHECK(module_counter(&fixture, "queue.stats.replacements") ==
 			BENCHMARK_WARMUP + BENCHMARK_SAMPLES - 1u);
 	CHECK(module_counter(&fixture, "queue.stats.protocol-errors") == 0);
@@ -1392,6 +1449,8 @@ int main(int argc, char **argv)
 		return 0;
 	}
 	if (withdrawal) {
+		test_copy_capture_withdrawal(false);
+		test_copy_capture_withdrawal(true);
 		test_format_recreation("copy");
 		test_retained_lease_withdrawal();
 		test_lease_generation_replacement();
