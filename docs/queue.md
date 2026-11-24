@@ -455,7 +455,17 @@ quiesced. Returned old-generation buffers remain unavailable until PipeWire
 removes that pool; neither process callback closes, duplicates, or changes an
 installed data descriptor.
 
-Pause and pool-withdrawal transitions set an atomic publication gate, then
+A copy queue with no playback buffers has one additional retirement step.
+PipeWire 4.0.8 detaches the capture port from its data loop and clears its
+I/O before issuing the first stream `remove_buffer` callback. During this
+callback the control thread can wait for the capture-loop mutex.
+`pw_loop_locked` runs the returns inline under that mutex while the native
+buffers can still be queued. Completion handling is serialized with the
+returns, and an absent or already retired playback pool has no copy in flight.
+Deferring the returns past the callback would lose the native loan when
+PipeWire clears the pool.
+
+Pause and pool-withdrawal transitions use an atomic publication gate and
 enqueue non-blocking stages in playback-loop, capture-loop, and main-loop
 order. Each stage therefore follows any callback already executing on its own
 loop without acquiring or waiting for another loop's lock. Process callbacks
