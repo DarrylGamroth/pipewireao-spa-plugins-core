@@ -14,6 +14,7 @@ struct stream_fixture {
 
 static struct stream_fixture capture, playback;
 static struct pw_properties *module_properties;
+static struct pw_loop *capture_loop;
 
 static struct pw_stream *stream_handle(struct stream_fixture *stream)
 {
@@ -51,7 +52,13 @@ int __wrap_pw_stream_return_buffer(struct pw_stream *stream, struct pw_buffer *b
 struct pw_loop *__wrap_pw_stream_get_data_loop(struct pw_stream *stream)
 {
 	spa_assert_se(stream == stream_handle(&capture));
-	return NULL;
+	return capture_loop;
+}
+
+uint32_t __wrap_pw_stream_get_node_id(struct pw_stream *stream)
+{
+	spa_assert_se(stream == stream_handle(&capture));
+	return 1;
 }
 
 enum pw_stream_state __wrap_pw_stream_get_state(struct pw_stream *stream, const char **error)
@@ -457,8 +464,53 @@ static void test_diagnostics(void)
 	pw_properties_free(module_properties);
 }
 
-int main(void)
+static void test_capture_withdrawal(bool disconnect_playback)
 {
+	struct fixture fixture;
+	struct impl *queue = &fixture.queue;
+
+	prepare(&fixture);
+	if (!disconnect_playback)
+		queue->n_playback_present = queue->n_playback_buffers = 0;
+	offer_capture(&fixture.input[0], NULL);
+	capture_process(queue);
+	spa_assert_se(queue->inputs[0].state == SLOT_PENDING);
+	if (disconnect_playback) {
+		playback_remove_buffer(queue, &fixture.output[0]);
+		playback_remove_buffer(queue, &fixture.output[1]);
+	}
+
+	/* A paused capture may already have scheduled an ownership transition. */
+	queue->ownership_in_progress = true;
+	capture_remove_buffer(queue, &fixture.input[0]);
+	spa_assert_se(capture.queued == &fixture.input[0]);
+	spa_assert_se(queue->inputs[0].returns == 1);
+	spa_assert_se(queue->inputs[0].state == SLOT_FREE);
+	spa_assert_se(pwao_queue_ring_size(&queue->pending) == 0);
+	spa_assert_se(queue->ownership_requested == OWNERSHIP_ACTION_WITHDRAW);
+	capture_remove_buffer(queue, &fixture.input[1]);
+	/* pw_stream clears the negotiated pool before announcing format removal. */
+	capture_param_changed(queue, SPA_PARAM_Format, NULL);
+	spa_assert_se(queue->inputs[0].returns == 1);
+	spa_assert_se(queue->n_capture_present == 0);
+	spa_assert_se(queue->fatal_error == FAILURE_NONE);
+}
+
+int main(int argc, char *argv[])
+{
+	if (argc == 2 && spa_streq(argv[1], "capture-withdrawal")) {
+		struct pw_main_loop *main_loop;
+
+		pw_init(&argc, &argv);
+		main_loop = pw_main_loop_new(NULL);
+		spa_assert_se(main_loop != NULL);
+		capture_loop = pw_main_loop_get_loop(main_loop);
+		test_capture_withdrawal(false);
+		test_capture_withdrawal(true);
+		pw_main_loop_destroy(main_loop);
+		pw_deinit();
+		return 0;
+	}
 	test_blocked_retry();
 	test_capture_faults();
 	test_completion_faults();

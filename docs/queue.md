@@ -336,6 +336,13 @@ MAY retain the current negotiated pool, but restart MUST begin with an empty
 pending queue and MUST preserve cumulative counters. Format or pool withdrawal
 starts a new input-pool generation.
 
+A copy queue with no playback buffers returns its outstanding capture buffers
+in the capture pool's removal callback. This includes capture withdrawal after
+the playback pool has been removed. The capture data loop serializes these
+returns with capture processing and pause handling. On PipeWireAO 4.0.8,
+`pw_stream` emits the pool's buffer removal callbacks before announcing input
+format removal.
+
 In lease storage, the output buffer MUST own an independent reference to the
 shared MemFd or DmaBuf and MUST NOT expose a pointer whose mapping lifetime is
 owned by the input stream. The module MUST NOT return an input buffer for reuse
@@ -483,6 +490,7 @@ both endpoint nodes once at initialization and then once per second:
 | `queue.stats.replacements` | Queued inputs displaced by `drop-oldest`. |
 | `queue.stats.dropped-arrivals` | Arriving inputs discarded by `drop-newest`. |
 | `queue.stats.backpressure` | Arrivals retained because the queue was full. |
+| `queue.stats.withdrawal-returns` | Capture buffers returned during input-pool withdrawal when no copy playback buffers remain. |
 | `queue.stats.deliveries` | Buffers published on the output stream. |
 | `queue.stats.completions` | Input leases completed by the output side. |
 | `queue.stats.pool-exhaustions` | Output cycles without the required reusable copy buffer or current-generation lease buffer. |

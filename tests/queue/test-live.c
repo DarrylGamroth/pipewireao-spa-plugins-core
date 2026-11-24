@@ -1362,11 +1362,12 @@ int main(int argc, char **argv)
 	char module_search_path[PATH_MAX * 2u];
 	const char *base_module_dir;
 	const char *separator;
-	bool benchmark;
+	bool benchmark, withdrawal;
 	int path_length;
 
-	CHECK(argc == 2 || (argc == 3 && strcmp(argv[2], "--benchmark") == 0));
-	benchmark = argc == 3;
+	benchmark = argc == 3 && strcmp(argv[2], "--benchmark") == 0;
+	withdrawal = argc == 3 && strcmp(argv[2], "--withdrawal") == 0;
+	CHECK(argc == 2 || benchmark || withdrawal);
 	path_length = snprintf(core_name, sizeof(core_name),
 			"pipewireao-queue-test-%ld", (long)getpid());
 	CHECK(path_length > 0 && (size_t)path_length < sizeof(core_name));
@@ -1387,6 +1388,13 @@ int main(int argc, char **argv)
 	if (benchmark) {
 		run_producer_benchmark("copy");
 		run_producer_benchmark("lease");
+		pw_deinit();
+		return 0;
+	}
+	if (withdrawal) {
+		test_format_recreation("copy");
+		test_retained_lease_withdrawal();
+		test_lease_generation_replacement();
 		pw_deinit();
 		return 0;
 	}

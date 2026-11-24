@@ -41,6 +41,7 @@ if get_option('tests').allowed()
       '-Wl,--wrap=pw_stream_queue_buffer',
       '-Wl,--wrap=pw_stream_return_buffer',
       '-Wl,--wrap=pw_stream_get_data_loop',
+      '-Wl,--wrap=pw_stream_get_node_id',
       '-Wl,--wrap=pw_stream_get_state',
       '-Wl,--wrap=pw_stream_update_properties',
       '-Wl,--wrap=pw_stream_set_error',
@@ -98,6 +99,12 @@ if get_option('tests').allowed()
     pipewire_pkg_dep.get_variable(pkgconfig: 'moduledir'),
   )
   test(
+    'pipewireao-queue-capture-withdrawal',
+    queue_callbacks_test,
+    args: ['capture-withdrawal'],
+    env: queue_module_test_env,
+  )
+  test(
     'pipewireao-queue-module',
     queue_module_test,
     args: queue_module.full_path(),
@@ -114,6 +121,14 @@ if get_option('tests').allowed()
     'pipewireao-queue-live',
     queue_live_test,
     args: queue_module.full_path(),
+    depends: queue_module,
+    env: queue_module_test_env,
+    timeout: 30,
+  )
+  test(
+    'pipewireao-queue-live-withdrawal',
+    queue_live_test,
+    args: [queue_module.full_path(), '--withdrawal'],
     depends: queue_module,
     env: queue_module_test_env,
     timeout: 30,

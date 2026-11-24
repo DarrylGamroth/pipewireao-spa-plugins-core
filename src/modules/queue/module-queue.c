@@ -115,6 +115,7 @@ struct input_stats {
 	_Atomic uint64_t replacements;
 	_Atomic uint64_t dropped_arrivals;
 	_Atomic uint64_t backpressure;
+	_Atomic uint64_t withdrawal_returns;
 };
 
 struct output_stats {
@@ -984,10 +985,22 @@ static void reset_input_ownership_quiescent(struct impl *impl,
 		atomic_store_explicit(&slot->token, SLOT_TOKEN_NONE,
 				memory_order_release);
 
-		if (return_capture && state != SLOT_FREE && slot->capture != NULL &&
-				pw_stream_queue_buffer(impl->capture, slot->capture) >= 0)
-			atomic_fetch_add_explicit(&slot->returns, 1,
+		if (return_capture && state != SLOT_FREE && slot->capture != NULL) {
+			int result = pw_stream_queue_buffer(impl->capture, slot->capture);
+
+			if (result < 0) {
+				MARK_PROTOCOL_ERROR(impl, "withdraw.return-input", i,
+						state, SLOT_FREE, result);
+				continue;
+			}
+			atomic_fetch_add_explicit(&slot->returns, 1, memory_order_relaxed);
+			atomic_fetch_add_explicit(&impl->input_stats.withdrawal_returns, 1,
 					memory_order_relaxed);
+			pw_log_log(SPA_LOG_LEVEL_DEBUG, __FILE__, __LINE__, __func__,
+					"capture node %u generation %" PRIu64 " recycled slot %u on withdrawal",
+					pw_stream_get_node_id(impl->capture),
+					impl->capture_generation, i);
+		}
 	}
 	pwao_queue_ring_reset(&impl->pending);
 	pwao_queue_ring_reset(&impl->completions);
@@ -1040,6 +1053,20 @@ static void pause_ownership_quiescent(struct impl *impl)
 static void withdraw_input_pool_quiescent(struct impl *impl)
 {
 	reset_input_ownership_quiescent(impl, false, true);
+}
+
+static int return_copy_inputs_on_withdrawal(struct spa_loop *loop, bool async,
+		uint32_t seq, const void *data, size_t size, void *user_data)
+{
+	struct impl *impl = user_data;
+
+	(void)loop;
+	(void)async;
+	(void)seq;
+	(void)data;
+	(void)size;
+	reset_input_ownership_quiescent(impl, true, false);
+	return 0;
 }
 
 static int configure_playback(struct impl *impl);
@@ -1335,6 +1362,18 @@ static void capture_remove_buffer(void *data, struct pw_buffer *buffer)
 	if (!impl->capture_pool_withdrawing) {
 		impl->capture_pool_withdrawing = true;
 		invalidate_playback_generation(impl, true);
+		/* No copy can still read the capture pool after the last playback
+		 * buffer was removed. Recycle before PipeWire revokes the inputs,
+		 * serialized with capture completions and pause handling. */
+		if (impl->storage == STORAGE_COPY && impl->n_playback_present == 0) {
+			struct pw_loop *loop = pw_stream_get_data_loop(impl->capture);
+			int result = loop == NULL ? -EIO : pw_loop_locked(loop,
+					return_copy_inputs_on_withdrawal, SPA_ID_INVALID, NULL, 0, impl);
+
+			if (result < 0)
+				MARK_PROTOCOL_ERROR(impl, "withdraw.capture-loop", slot->index,
+						SLOT_FREE, SLOT_FREE, result);
+		}
 		(void)request_ownership_action(impl, OWNERSHIP_ACTION_WITHDRAW);
 	}
 	slot->capture = NULL;
@@ -1850,6 +1889,7 @@ static void update_stats(void *data, uint64_t expirations)
 	ADD_COUNTER("queue.stats.dropped-arrivals",
 			impl->input_stats.dropped_arrivals);
 	ADD_COUNTER("queue.stats.backpressure", impl->input_stats.backpressure);
+	ADD_COUNTER("queue.stats.withdrawal-returns", impl->input_stats.withdrawal_returns);
 	ADD_COUNTER("queue.stats.deliveries", impl->output_stats.deliveries);
 	ADD_COUNTER("queue.stats.completions", impl->output_stats.completions);
 	ADD_COUNTER("queue.stats.pool-exhaustions",
