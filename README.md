@@ -18,7 +18,7 @@ need their own GitHub repository.
 
 ## Build and stage
 
-The build requires the PipeWireAO 4.0.9 or later 4.x SDK, Meson, Ninja, Cargo, and Rust.
+The build requires the PipeWireAO 4.0.10 or later 4.x SDK, Meson, Ninja, Cargo, and Rust.
 The Rust workspace pins its PipeWireAO bindings to an immutable Git revision;
 Cargo fetches that revision or uses its local cache.
 
@@ -60,7 +60,7 @@ sources without adding credentials to the image or repository.
 
 ## CI and coverage
 
-GitHub Actions builds and tests against PipeWireAO 4.0.9 on Debian 13.
+GitHub Actions builds and tests against PipeWireAO 4.0.10 on Debian 13.
 It runs the Meson suite and the
 Rust workspace tests. The Rust report also includes Rust code executed by
 Meson while loading the SPA plugins.
