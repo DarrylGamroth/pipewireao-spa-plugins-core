@@ -70,7 +70,7 @@ The explanation below combines a
 source-derived valid sequence with the mapped runtime trace.
 
 Affected queue code:
-[module-queue.c](../src/modules/queue/module-queue.c),
+[module-queue.c](https://github.com/DarrylGamroth/pipewireao-spa-plugins-core/blob/01df204/src/modules/queue/module-queue.c),
 `reclaim_playback_buffers`, `playback_process`, and `find_copy_output`.
 Relevant native implementation: `src/pipewire/stream.c`, `update_requested`,
 `call_process`, and `impl_node_process_output` at the native revision above.

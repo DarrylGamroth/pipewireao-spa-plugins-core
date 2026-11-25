@@ -9,8 +9,7 @@ plugin repositories required by the target system.
 
 It provides:
 
-- discard, ndarray, NuVu, pyRTC, and HERMES-decoder SPA components;
-- the bounded queue PipeWireAO module;
+- ndarray, NuVu, pyRTC, and HERMES-decoder SPA components;
 - shared C headers and pkg-config metadata used by the other plugin
   repositories.
 
@@ -19,7 +18,7 @@ need their own GitHub repository.
 
 ## Build and stage
 
-The build requires the PipeWireAO 4.x metadata ABI, Meson, Ninja, Cargo, and Rust.
+The build requires the PipeWireAO 4.0.9 or later 4.x SDK, Meson, Ninja, Cargo, and Rust.
 The Rust workspace pins its PipeWireAO bindings to an immutable Git revision;
 Cargo fetches that revision or uses its local cache.
 
@@ -35,13 +34,10 @@ image, or package build. Install it before configuring a separate plugin
 repository so `pipewireao-spa-plugins-0.1.pc` and the shared headers are
 available.
 
-See [`docs/queue.md`](docs/queue.md) for the queue module and
+PipeWireAO supplies the [bounded queue module](docs/queue.md) and the
+`api.pipewireao.discard` sink. See
 [`spa/plugins/pyrtc/README.md`](spa/plugins/pyrtc/README.md) for the pyRTC
 bridge.
-
-Use `-Dqueue-only=true` when packaging the queue separately. This selection
-uses the installed PipeWireAO SDK and builds the C module without Cargo or
-the SPA plugins.
 
 ## Container and package recipes
 
@@ -64,8 +60,8 @@ sources without adding credentials to the image or repository.
 
 ## CI and coverage
 
-GitHub Actions builds and tests against PipeWireAO 4.0.5 on Debian 13.
-It runs the Meson suite, including the PipeWireAO queue graph tests, and the
+GitHub Actions builds and tests against PipeWireAO 4.0.9 on Debian 13.
+It runs the Meson suite and the
 Rust workspace tests. The Rust report also includes Rust code executed by
 Meson while loading the SPA plugins.
 

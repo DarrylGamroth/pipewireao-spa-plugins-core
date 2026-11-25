@@ -15,7 +15,7 @@ fn main() {
         .include("../../include");
     let mut bindings = bindgen::Builder::default()
         .header("../../spa/plugins/metadata.h")
-        .allowlist_type("pwao_metadata")
+        .allowlist_type("spa_meta_profile")
         .allowlist_function("pwao_metadata_parse")
         .blocklist_type("spa_meta_requirement")
         .raw_line("use libspa::sys::spa_meta_requirement;");

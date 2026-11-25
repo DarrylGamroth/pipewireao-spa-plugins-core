@@ -21,7 +21,7 @@
       "build_targets": [],
       "section": "libs",
       "description": "SDK-independent PipeWireAO SPA plugins",
-      "long_description": "Transport transforms, the discard endpoint, the bounded queue module, and device-format decoders. This package has no optional vendor SDK dependency."
+      "long_description": "Transport transforms and device-format decoders. This package has no optional vendor SDK dependency."
     },
     "dev": {
       "package": "pipewireao-spa-plugins-dev",

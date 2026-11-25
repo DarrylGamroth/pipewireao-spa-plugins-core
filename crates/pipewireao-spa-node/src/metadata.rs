@@ -6,7 +6,7 @@ mod ffi {
     include!(concat!(env!("OUT_DIR"), "/metadata.rs"));
 }
 pub(crate) fn parse(text: &CStr) -> Result<Vec<sys::spa_meta_requirement>, i32> {
-    let mut profile = std::mem::MaybeUninit::<ffi::pwao_metadata>::uninit();
+    let mut profile = std::mem::MaybeUninit::<ffi::spa_meta_profile>::uninit();
     let result = unsafe { ffi::pwao_metadata_parse(profile.as_mut_ptr(), text.as_ptr()) };
     if result < 0 {
         return Err(result);

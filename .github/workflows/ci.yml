@@ -36,13 +36,13 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install PipeWireAO 4.0.5
+      - name: Install PipeWireAO 4.0.9
         run: |
           prefix="$RUNNER_TEMP/pipewireao"
-          archive="$RUNNER_TEMP/PipeWireAO.v4.0.5.x86_64-linux-gnu.tar.gz"
+          archive="$RUNNER_TEMP/PipeWireAO.v4.0.9.x86_64-linux-gnu.tar.gz"
           curl --fail --silent --show-error --location --retry 3 --output "$archive" \
-            "https://github.com/DarrylGamroth/PipeWireAO_jll.jl/releases/download/PipeWireAO-v4.0.5+0/PipeWireAO.v4.0.5.x86_64-linux-gnu.tar.gz"
-          printf '%s  %s\n' 3ec7fa12811af376adeebb85985b552a13752cdf95a9c1bc6f42aaa2fb4f1828 "$archive" | sha256sum --strict --check -
+            "https://github.com/DarrylGamroth/PipeWireAO_jll.jl/releases/download/PipeWireAO-v4.0.9+0/PipeWireAO.v4.0.9.x86_64-linux-gnu.tar.gz"
+          printf '%s  %s\n' 094eddf7caff4bfbd62d3f1252e98aae3b4e79ba7c50133f3316b1bef2eeed20 "$archive" | sha256sum --strict --check -
           mkdir "$prefix"
           tar -xzf "$archive" -C "$prefix"
           echo "PKG_CONFIG_PATH=$prefix/lib/pkgconfig:$prefix/share/pkgconfig" >> "$GITHUB_ENV"

@@ -16,7 +16,7 @@ fs = import('fs')
 add_project_arguments('-D_GNU_SOURCE', language: 'c')
 
 spa_pkg_dep = dependency('libspa-ao-0.2', version: '>= 0.2')
-pipewire_pkg_dep = dependency('libpipewire-ao-0.3', version: ['>= 4.0.0', '< 5.0.0'])
+pipewire_pkg_dep = dependency('libpipewire-ao-0.3', version: ['>= 4.0.9', '< 5.0.0'])
 plugin_api_dependencies = []
 if fs.is_dir('include/pipewireao-plugins')
   plugin_include = include_directories('include')
@@ -40,10 +40,6 @@ cxx = meson.get_compiler('cpp')
 dl_dep = cc.find_library('dl', required: false)
 m_dep = cc.find_library('m')
 threads_dep = dependency('threads')
-if get_option('queue-only')
-  subdir('src/modules/queue')
-  subdir_done()
-endif
 
 drm_dep = dependency('libdrm', required: false)
 if fs.is_dir('include/pipewireao-plugins')
@@ -80,11 +76,9 @@ endif
 
 foreach component_dir : [
   'spa/plugins/alpao',
-  'spa/plugins/discard',
   'spa/plugins/ndarray',
   'spa/plugins/nuvu',
   'spa/plugins/pyrtc',
-  'src/modules/queue',
 ]
   if fs.exists(component_dir / 'meson.build')
     subdir(component_dir)
@@ -392,11 +386,6 @@ if imagestreamio_found and fs.exists('spa/plugins/imagestreamio/meson.build')
   subdir('spa/plugins/imagestreamio')
 endif
 
-summary(
-  'Format-agnostic discard sink',
-  fs.exists('spa/plugins/discard/meson.build'),
-  section: 'SPA plugins',
-)
 summary('eGrabber plugin', egrabber_found, section: 'SPA plugins')
 summary('BGAPI2 plugin', bgapi2_found, section: 'SPA plugins')
 summary('EDT PDV plugin', edtpdv_found, section: 'SPA plugins')
